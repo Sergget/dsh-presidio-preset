@@ -1,0 +1,32 @@
+{
+  "name": "presidio-pii",
+  "version": "0.1.0",
+  "description": "Local reversible PII redaction for DeepSeek Harness: redacts Chinese PII before prompts leave the harness, restores placeholders after the LLM responds.",
+  "entrypoint": "hook.py",
+  "hooks": {
+    "on_before_llm": {
+      "handler": "hook:before_llm",
+      "description": "Redact PII in the outgoing prompt; stores mappings under a per-conversation session_id."
+    },
+    "on_after_llm": {
+      "handler": "hook:after_llm",
+      "description": "Restore ⟦PII:TYPE:SEQ⟧ placeholders in the LLM response back to original PII."
+    }
+  },
+  "config": {
+    "db_path": ".pii_presidio_store/sessions.db",
+    "session_scope": "conversation",
+    "supported_extensions": [".txt", ".md", ".docx", ".xlsx", ".pptx"]
+  },
+  "entity_types": [
+    "ID_NUMBER",
+    "PHONE_NUMBER",
+    "EMAIL_ADDRESS",
+    "CREDIT_CODE",
+    "BANK_CARD",
+    "PERSON",
+    "LOCATION",
+    "ORGANIZATION",
+    "JOB_TITLE"
+  ]
+}
