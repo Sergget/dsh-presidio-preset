@@ -27,6 +27,21 @@ python -m presidio_pii.cli restore report.redacted.docx
 # -> report.restored.docx
 ```
 
+## Testing
+
+```bash
+pip install -e ".[dev]"
+pytest tests/ -v                          # 23 个回归用例
+
+# 无 DSH 检测真实文档 (泄漏检查 + 还原无损 + 占位符清零, JSON 报告)
+python tools/standalone_check.py 报告.docx 名单.xlsx
+
+# 无 DSH 模拟多轮对话, 记录结构化发出/接收日志 (JSONL)
+python tools/dsh_sim.py --turn "张伟的身份证是110101199003077890,帮我查"
+```
+
+详见 [tools/README.md](tools/README.md)。
+
 ## Architecture
 
 - **`presidio_pii/engine.py`**: Core redaction & restoration pipeline + priority overlap resolver.

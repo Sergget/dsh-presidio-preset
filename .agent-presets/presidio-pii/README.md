@@ -19,7 +19,8 @@
 1. 安装本包: `pip install -e <repo-root>`
 2. 在 DSH preset 配置中引用 `preset.json` 声明的两个钩子:
    - `before_llm(prompt, conversation_id)` → 脱敏文本
-   - `after_llm(response, conversation_id)` → 还原文本
+   - `after_llm(response, conversation_id)` → `(还原文本, 统计字典)`, 只需文本时取 `[0]`
+   - 每次调用自动写入结构化日志 `.pii_presidio_store/hook_log.jsonl` (可用 `PII_DSH_LOG_PATH=0` 关闭)
 3. `conversation_id` 由 DSH 传入;未传入时按日期派生,同一天内共享会话
 
 ## 配置
