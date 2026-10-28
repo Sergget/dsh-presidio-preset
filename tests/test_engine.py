@@ -154,6 +154,18 @@ def test_no_false_positive_plain_text(engine):
     assert rd.n_replaced == 0
 
 
+def test_multi_turn_placeholder_no_collision(engine):
+    # 同一会话多轮 redact: 序号须全局递增, 不同轮次的同名占位符不得指向不同原文
+    sid = engine.registry.create_session()
+    rd1 = engine.redact("张伟的贷款申请", sid, "turn1")
+    rd2 = engine.redact("李明的开户资料", sid, "turn2")
+    assert rd1.restored["⟦PII:PERSON:0001⟧"] == "张伟"
+    assert rd2.restored["⟦PII:PERSON:0002⟧"] == "李明"
+    # 两轮响应同时还原均正确
+    assert engine.restore(rd1.text, sid, "turn1").text == "张伟的贷款申请"
+    assert engine.restore(rd2.text, sid, "turn2").text == "李明的开户资料"
+
+
 def test_session_isolation(engine):
     sid1 = engine.registry.create_session()
     sid2 = engine.registry.create_session()

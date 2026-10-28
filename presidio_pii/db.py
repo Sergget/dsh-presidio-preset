@@ -56,6 +56,14 @@ class SessionRegistry:
             f"SELECT ptype, placeholder, original FROM mapping WHERE {where} ORDER BY idx", args).fetchall()
         return [{"ptype": r[0], "placeholder": r[1], "original": r[2]} for r in rows]
 
+    def get_max_seq(self, sid: str, ptype: str) -> int:
+        """返回该会话内指定实体类型当前最大序号 (跨多次 redact 调用全局递增,
+        避免同会话不同轮次的占位符冲突)。"""
+        row = self.conn.execute(
+            "SELECT MAX(CAST(SUBSTR(placeholder, -5, 4) AS INTEGER)) FROM mapping "
+            "WHERE session_id=? AND ptype=?", (sid, ptype)).fetchone()
+        return row[0] or 0
+
     def delete_session(self, sid: str) -> None:
         self.conn.execute("DELETE FROM mapping WHERE session_id=?", (sid,))
         self.conn.execute("DELETE FROM session WHERE session_id=?", (sid,))

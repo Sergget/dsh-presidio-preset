@@ -71,8 +71,11 @@ class PresidioPIIEngine:
     # ---- 脱敏 ----
     def redact(self, text: str, session_id: str, doc_id: str = "default") -> RedactResult:
         results = self.analyze(text)  # 已按文本顺序排序
-        # 序号按文本出现顺序分配, 占位符形如 ⟦PII:<TYPE>:<SEQ>⟧
-        counters: Dict[str, int] = {}
+        # 序号在会话内全局递增 (跨多次 redact 调用), 避免多轮对话占位符冲突
+        counters: Dict[str, int] = {
+            ptype: self.registry.get_max_seq(session_id, ptype)
+            for ptype in {res.entity_type for res in results}
+        }
         restored: Dict[str, str] = {}
         plan = []  # (result, placeholder, original)
         for res in results:
