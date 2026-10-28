@@ -118,9 +118,8 @@ def _cmd_restore(args: argparse.Namespace) -> int:
 
 def main(argv: list | None = None) -> int:
     ap = argparse.ArgumentParser("Presidio PII DSH Plugin")
+    ap.add_argument("--demo", action="store_true", help="run built-in demo")
     sub = ap.add_subparsers(dest="command")
-
-    sub.add_parser("--demo", help="run built-in demo")
 
     p_red = sub.add_parser("redact", help="脱敏文档 (txt/md/docx/xlsx/pptx)")
     p_red.add_argument("file")
@@ -135,14 +134,11 @@ def main(argv: list | None = None) -> int:
     p_res.add_argument("--doc-id", help="文档标识")
 
     args = ap.parse_args(argv)
-    if args.command is None or args.command == "--demo":
-        _demo()
-        return 0
     if args.command == "redact":
         return _cmd_redact(args)
     if args.command == "restore":
         return _cmd_restore(args)
-    ap.print_help()
+    _demo()
     return 0
 
 
