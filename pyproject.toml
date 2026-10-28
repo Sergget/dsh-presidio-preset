@@ -1,12 +1,18 @@
 [project]
 name = "presidio-pii-dsh"
 version = "0.1.0"
-description = "Local PII redaction and restoration plugin for DeepSeek Harness using Microsoft Presidio"
+description = "Local PII redaction and restoration plugin for DeepSeek Harness (zero spaCy/PyTorch, regex + checksum based)"
 dependencies = [
-    "presidio-analyzer>=2.2.0",
-    "presidio-anonymizer>=2.2.0",
     "python-docx>=1.1.0",
     "python-pptx>=1.0.0",
     "openpyxl>=3.1.0",
 ]
 requires-python = ">=3.9"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+presidio-pii = "presidio_pii.cli:main"
