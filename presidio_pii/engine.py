@@ -18,9 +18,13 @@ from .db import SessionRegistry
 
 PH_OPEN, PH_CLOSE = "⟦", "⟧"
 
-# 实体优先级 (用于重叠冲突处理: 高优先级胜)
-_PRIO = {"ID_NUMBER": 0, "PERSON": 1, "LOCATION": 2,
-         "JOB_TITLE": 3, "ORGANIZATION": 4}
+# 实体优先级 (用于重叠冲突处理: 数字越小优先级越高)
+# 设计原则: 召回优先 — PERSON 必须高于 ORGANIZATION (防止人名被机构名整体吞掉),
+# LOCATION 高于 PERSON (地名 "北京市朝阳区" 比误切的人名更精确),
+# BANK_CARD 正则最宽松, 在数字类实体中优先级最低
+_PRIO = {"ID_NUMBER": 0, "CREDIT_CODE": 1, "PHONE_NUMBER": 2, "EMAIL_ADDRESS": 3,
+         "BANK_CARD": 4, "LOCATION": 5, "PERSON": 6, "JOB_TITLE": 7,
+         "ORGANIZATION": 8}
 
 
 @dataclass
@@ -53,51 +57,44 @@ class PresidioPIIEngine:
     def _resolve_overlaps(results: List[RecognizerResult]) -> List[RecognizerResult]:
         if not results:
             return []
-        # 按起点, 然后优先级排序 (高优先级在前)
-        results.sort(key=lambda r: (r.start, _PRIO.get(r.entity_type, 99),
-                                    -(r.end - r.start)))
+        # 按 (优先级, 长度, 起点) 排序: 高优先级胜, 同级时长实体胜
+        results.sort(key=lambda r: (_PRIO.get(r.entity_type, 99),
+                                    -(r.end - r.start), r.start))
         merged: List[RecognizerResult] = []
         for r in results:
-            # 与已接受实体冲突?
-            overlap = False
-            for m in merged:
-                if r.start < m.end and r.end > m.start:
-                    # 冲突: 若当前优先级更低, 跳过; 若更高, 截断
-                    if _PRIO.get(r.entity_type, 99) > _PRIO.get(m.entity_type, 99):
-                        overlap = True
-                        break
-                    # 当前优先级更低, 跳过
-                    overlap = True
-                    break
-            if not overlap:
+            if not any(r.start < m.end and r.end > m.start for m in merged):
                 merged.append(r)
-        # 再次按起点排序
+        # 还原为文本顺序
         merged.sort(key=lambda r: r.start)
         return merged
 
     # ---- 脱敏 ----
     def redact(self, text: str, session_id: str, doc_id: str = "default") -> RedactResult:
-        results = self.analyze(text)
-        # 逆序替换以避免 offset 漂移
-        results = sorted(results, key=lambda x: x.start, reverse=True)
-
+        results = self.analyze(text)  # 已按文本顺序排序
+        # 序号按文本出现顺序分配, 占位符形如 ⟦PII:<TYPE>:<SEQ>⟧
         counters: Dict[str, int] = {}
         restored: Dict[str, str] = {}
-        out_text = text
-        n = 0
+        plan = []  # (result, placeholder, original)
         for res in results:
             ptype = res.entity_type
             counters[ptype] = counters.get(ptype, 0) + 1
-            seq = counters[ptype]
-            ph = f"{PH_OPEN}PII:{ptype}:{seq:04d}{PH_CLOSE}"
+            ph = f"{PH_OPEN}PII:{ptype}:{counters[ptype]:04d}{PH_CLOSE}"
             orig = text[res.start:res.end]
-            out_text = out_text[:res.start] + ph + out_text[res.end:]
+            plan.append((res, ph, orig))
             restored[ph] = orig
-            self.registry.add_mapping(session_id, doc_id, n, ptype, ph, orig)
-            n += 1
+
+        # 逆序替换以避免 offset 漂移
+        out_text = text
+        for res, ph, _orig in reversed(plan):
+            out_text = out_text[:res.start] + ph + out_text[res.end:]
+
+        # 映射入库 (idx 按文本顺序)
+        for idx, (res, ph, orig) in enumerate(plan):
+            self.registry.add_mapping(session_id, doc_id, idx,
+                                      res.entity_type, ph, orig)
 
         return RedactResult(text=out_text, session_id=session_id, doc_id=doc_id,
-                            n_replaced=n, restored=restored)
+                            n_replaced=len(plan), restored=restored)
 
     # ---- 还原 ----
     def restore(self, text: str, session_id: str, doc_id: str = "default") -> RedactResult:

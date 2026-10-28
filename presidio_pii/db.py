@@ -9,9 +9,7 @@ from pathlib import Path
 DEFAULT_DB = Path("./.pii_presidio_store/sessions.db")
 
 
-def _init_db(db_path: Path) -> sqlite3.Connection:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+def _init_schema(conn: sqlite3.Connection) -> None:
     conn.execute("""CREATE TABLE IF NOT EXISTS session (
         session_id TEXT PRIMARY KEY, created_at REAL)""")
     conn.execute("""CREATE TABLE IF NOT EXISTS mapping (
@@ -23,12 +21,15 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
         original    TEXT,
         created_at  REAL)""")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_map_sess ON mapping(session_id)")
-    return conn
 
 
 class SessionRegistry:
-    def __init__(self, db_path: Path = DEFAULT_DB):
-        self.conn = _init_db(db_path)
+    def __init__(self, db_path: Path | str = DEFAULT_DB):
+        db_path = Path(db_path) if db_path != ":memory:" else db_path
+        if db_path != ":memory:":
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(str(db_path))
+        _init_schema(self.conn)
 
     def create_session(self, doc_id: str = "default") -> str:
         sid = uuid.uuid4().hex[:12]
