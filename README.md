@@ -17,6 +17,14 @@ pip install -e .
 
 # Run round-trip demo
 python -m presidio_pii.cli --demo
+
+# Redact a document (txt/md/docx/xlsx/pptx)
+python -m presidio_pii.cli redact report.docx
+# -> report.redacted.docx + report.redacted.docx.session.json
+
+# Restore (session id auto-read from sidecar)
+python -m presidio_pii.cli restore report.redacted.docx
+# -> report.restored.docx
 ```
 
 ## Architecture
@@ -24,4 +32,6 @@ python -m presidio_pii.cli --demo
 - **`presidio_pii/engine.py`**: Core redaction & restoration pipeline + priority overlap resolver.
 - **`presidio_pii/chinese_recognizers.py`**: Custom Chinese PII recognizers (Presidio API compatible).
 - **`presidio_pii/db.py`**: SQLite session mapping storage.
+- **`presidio_pii/documents.py`**: Text-unit extraction/write-back for txt/docx/xlsx/pptx.
 - **`presidio_pii/cli.py`**: Command-line interface.
+- **`.agent-presets/presidio-pii/`**: DeepSeek Harness (DSH) agent preset integration.
