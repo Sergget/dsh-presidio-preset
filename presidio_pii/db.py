@@ -21,6 +21,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         original    TEXT,
         created_at  REAL)""")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_map_sess ON mapping(session_id)")
+    # get_max_seq 按 (session_id, ptype) 取 MAX, 无此索引时随库增长退化为全表扫描
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_map_sess_ptype ON mapping(session_id, ptype)")
 
 
 class SessionRegistry:
@@ -29,6 +31,9 @@ class SessionRegistry:
         if db_path != ":memory:":
             db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(db_path))
+        # WAL + NORMAL: 批量写入时显著减少 fsync; :memory: 会忽略这两个设置
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         _init_schema(self.conn)
 
     def create_session(self, doc_id: str = "default") -> str:
@@ -39,11 +44,17 @@ class SessionRegistry:
         return sid
 
     def add_mapping(self, sid: str, doc_id: str, idx: int,
-                    ptype: str, placeholder: str, original: str) -> None:
+                    ptype: str, placeholder: str, original: str,
+                    commit: bool = True) -> None:
+        """登记一条映射; commit=False 时由调用方批量提交 (大幅减少磁盘同步)。"""
         self.conn.execute(
             "INSERT INTO mapping(session_id, doc_id, idx, ptype, placeholder, original, created_at) "
             "VALUES (?,?,?,?,?,?,?)",
             (sid, doc_id, idx, ptype, placeholder, original, time.time()))
+        if commit:
+            self.conn.commit()
+
+    def commit(self) -> None:
         self.conn.commit()
 
     def get_restore_map(self, sid: str, doc_id: str | None = None) -> list[dict]:

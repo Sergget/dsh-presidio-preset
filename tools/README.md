@@ -97,5 +97,54 @@ mock LLM 会像真实模型一样在回复中原样引用占位符, 因此能验
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/ -v        # 23 个用例: 识别边界 / round-trip / 日志 / 模拟流程
+pytest tests/ -v        # 用例: 识别边界 / round-trip / 日志 / 模拟流程 / 白名单
 ```
+
+## 4. 合成测试语料 — `gen_test_corpus.py`
+
+把虚构的单位（国家级/省部级/市级/县级）、公司、公司简称、人名、地址、身份证号、
+手机号、邮箱、统一社会信用代码混入一份基础 docx，切分成多份小文档，并输出真值清单。
+
+```bash
+python tools/gen_test_corpus.py \
+  --base 项目建议书-redacted/项目建议书.docx \
+  --mapping 项目建议书-redacted/项目建议书.docx.mapping.csv \
+  --out testdata/ --parts 12 --seed 42
+```
+
+- `--mapping` 用于把基础文档里的 `⟦PII:...⟧` 还原成（已脱敏的）原文；不传则保留占位符
+- 固定 `--seed` 保证可复现；身份证号按 GB/T 11643 生成有效校验位
+- 产出：`part-01.docx …`、`manifest.json`（每条真值含 `type` 与 `hard` 标记）、`whitelist.txt`
+- 公司/单位简称（如「智数科技」「省数据局」）标记为 `hard`，单独统计
+
+> `testdata/` 已 gitignore：产物含基础文档内容，只在本地使用。
+
+## 5. 召回/误报评估 — `eval_corpus.py`
+
+对合成语料跑一遍识别，按真值清单统计召回与额外命中。兼容 v1（`parts`）与 v2（`docs`）两种 manifest。
+
+```bash
+python tools/eval_corpus.py --dir testdata/
+python tools/eval_corpus.py --dir testdata_v2/ --whitelist testdata_v2/whitelist.txt
+python tools/eval_corpus.py --dir testdata_v2/ --json testdata_v2/report.json
+```
+
+- 召回按类型统计；真值被识别区间覆盖 ≥80% 即计为命中（允许地址被拆成省/市/区/街道多段）
+- `额外命中` 是与所有真值区间都不重叠的识别结果，可能是文档自带的地名/机构，需人工判断
+- `简称(hard)` 单列：简称通常不在任何词典里，是规则方案的已知短板
+
+## 6. 多类型语料 v2 — `gen_corpus_v2.py`
+
+覆盖简历 / 合同 / 公文 / 报告 / 文献 / 工资表 / 通讯录 7 类，每类默认 12 份，共 84 份。
+
+```bash
+python tools/gen_corpus_v2.py --out testdata_v2 --per-type 12 --seed 42
+```
+
+- 格式按类型取自然载体：docx（简历/合同/公文/报告）、pptx（报告汇报版）、
+  md（文献）、xlsx（工资表/通讯录）、docx 表格（通讯录）
+- 真值 2400+ 条，含字段名（`姓名`/`身份证号`/`岗位`…）与 `hard` 标记
+- 身份证校验位有效、银行卡通过 Luhn；全部为虚构数据
+- `manifest.json` 记录每份文档的类型、格式与真值；`whitelist.txt` 为白名单示例
+- 基础版式由代码生成（`docs/SOURCES.md` 记录了模板下载尝试与不可用原因）
+

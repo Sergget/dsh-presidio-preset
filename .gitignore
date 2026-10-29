@@ -3,5 +3,16 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .pii_presidio_store/
+# 脱敏/还原产物含 PII 或会话凭据, 不入库
+*.redacted.*
+*.restored.*
+*.session.json
+*.session.csv
+*.mapping.csv
+*-redacted/
+*-restored/
+# 合成测试语料 (由 tools/gen_test_corpus.py 生成, 含基础文档内容)
+testdata/
+testdata_v2/
 build/
 dist/

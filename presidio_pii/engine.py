@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List
 
@@ -17,10 +18,17 @@ from .chinese_recognizers import RecognizerResult, get_chinese_recognizers
 from .db import SessionRegistry
 
 PH_OPEN, PH_CLOSE = "⟦", "⟧"
+_PH_RE = re.compile(r"⟦PII:[A-Z_]+:\d+⟧")
 
-# 实体优先级 (用于重叠冲突处理: 数字越小优先级越高)
-# 设计原则: 召回优先 — PERSON 必须高于 ORGANIZATION (防止人名被机构名整体吞掉),
-# LOCATION 高于 PERSON (地名 "北京市朝阳区" 比误切的人名更精确),
+
+def count_placeholders(text: str) -> int:
+    """统计文本中残留的占位符数量 (用于还原后校验)。"""
+    return len(_PH_RE.findall(text))
+
+# 实体优先级 (重叠冲突时使用: 数字越小优先级越高)
+# 裁决顺序: 先取更长的实体 ("安徽省数据资源管理局" 不被其中的 "安徽省" 切碎),
+# 等长时再按本优先级 — 人名高于机构名 (防止人名被机构名整体吞掉),
+# 地名高于人名 (地名 "北京市朝阳区" 比误切的人名更精确),
 # BANK_CARD 正则最宽松, 在数字类实体中优先级最低
 _PRIO = {"ID_NUMBER": 0, "CREDIT_CODE": 1, "PHONE_NUMBER": 2, "EMAIL_ADDRESS": 3,
          "BANK_CARD": 4, "LOCATION": 5, "PERSON": 6, "JOB_TITLE": 7,
@@ -35,14 +43,45 @@ class RedactResult:
     n_replaced: int = 0
     restored: Dict[str, str] = field(default_factory=dict)
     unrestored: Dict[str, str] = field(default_factory=dict)
+    entity_counts: Dict[str, int] = field(default_factory=dict)
+    n_whitelisted: int = 0
 
 
 class PresidioPIIEngine:
-    """零 spaCy 依赖的轻量引擎, API 兼容 Microsoft Presidio 概念。"""
+    """零 spaCy 依赖的轻量引擎, API 兼容 Microsoft Presidio 概念。
 
-    def __init__(self, db_path=None):
+    whitelist: 受保护的关键词列表。命中白名单的区域不会被脱敏,
+    与白名单区域重叠的实体一并跳过 (例如白名单含 "合肥市数据资源局" 时,
+    其中的 "合肥市" 也不会被单独脱敏)。
+    """
+
+    def __init__(self, db_path=None, whitelist=None):
         self.recognizers = get_chinese_recognizers()
         self.registry = SessionRegistry(db_path) if db_path else SessionRegistry()
+        self.whitelist = [w for w in (whitelist or []) if w]
+
+    def set_whitelist(self, terms) -> None:
+        self.whitelist = [w for w in (terms or []) if w]
+
+    # ---- 白名单 ----
+    def _protected_spans(self, text: str) -> List[tuple]:
+        """白名单词在文本中的所有出现位置 (start, end)。"""
+        spans = []
+        for term in self.whitelist:
+            start = text.find(term)
+            while start != -1:
+                spans.append((start, start + len(term)))
+                start = text.find(term, start + 1)
+        return spans
+
+    @staticmethod
+    def _drop_protected(results: List[RecognizerResult], spans: List[tuple]):
+        """丢弃与白名单区域重叠的实体, 返回 (保留的实体, 被跳过的数量)。"""
+        if not spans:
+            return results, 0
+        kept = [r for r in results
+                if not any(r.start < e and r.end > s for s, e in spans)]
+        return kept, len(results) - len(kept)
 
     # ---- 分析 ----
     def analyze(self, text: str) -> List[RecognizerResult]:
@@ -57,9 +96,10 @@ class PresidioPIIEngine:
     def _resolve_overlaps(results: List[RecognizerResult]) -> List[RecognizerResult]:
         if not results:
             return []
-        # 按 (优先级, 长度, 起点) 排序: 高优先级胜, 同级时长实体胜
-        results.sort(key=lambda r: (_PRIO.get(r.entity_type, 99),
-                                    -(r.end - r.start), r.start))
+        # 长实体优先: "安徽省数据资源管理局" 应整体保留, 不被其中的 "安徽省" 切碎;
+        # 等长时按优先级, 再按起点, 保证结果稳定
+        results.sort(key=lambda r: (-(r.end - r.start),
+                                    _PRIO.get(r.entity_type, 99), r.start))
         merged: List[RecognizerResult] = []
         for r in results:
             if not any(r.start < m.end and r.end > m.start for m in merged):
@@ -69,14 +109,29 @@ class PresidioPIIEngine:
         return merged
 
     # ---- 脱敏 ----
-    def redact(self, text: str, session_id: str, doc_id: str = "default") -> RedactResult:
+    def redact(self, text: str, session_id: str, doc_id: str = "default",
+               counters: Dict[str, int] | None = None,
+               commit: bool = True) -> RedactResult:
+        """脱敏单段文本。
+
+        counters 可在同一文档的多次调用间复用 (跨单元共享序号),
+        首次遇到某实体类型时才查询映射库, 避免逐单元重复 MAX(seq) 查询。
+        commit=False 时把提交推迟到调用方, 批量写库时避免逐单元 fsync。
+        """
         results = self.analyze(text)  # 已按文本顺序排序
+        skipped = 0
+        if self.whitelist:
+            results, skipped = self._drop_protected(results, self._protected_spans(text))
         # 序号在会话内全局递增 (跨多次 redact 调用), 避免多轮对话占位符冲突
-        counters: Dict[str, int] = {
-            ptype: self.registry.get_max_seq(session_id, ptype)
-            for ptype in {res.entity_type for res in results}
-        }
+        if counters is None:
+            counters = {res.entity_type: self.registry.get_max_seq(session_id, res.entity_type)
+                        for res in results}
+        else:
+            for res in results:
+                if res.entity_type not in counters:
+                    counters[res.entity_type] = self.registry.get_max_seq(session_id, res.entity_type)
         restored: Dict[str, str] = {}
+        entity_counts: Dict[str, int] = {}
         plan = []  # (result, placeholder, original)
         for res in results:
             ptype = res.entity_type
@@ -85,31 +140,51 @@ class PresidioPIIEngine:
             orig = text[res.start:res.end]
             plan.append((res, ph, orig))
             restored[ph] = orig
+            entity_counts[ptype] = entity_counts.get(ptype, 0) + 1
 
         # 逆序替换以避免 offset 漂移
         out_text = text
         for res, ph, _orig in reversed(plan):
             out_text = out_text[:res.start] + ph + out_text[res.end:]
 
-        # 映射入库 (idx 按文本顺序)
+        # 映射入库 (idx 按文本顺序); 整批提交, 避免逐条 commit 的磁盘同步开销
         for idx, (res, ph, orig) in enumerate(plan):
             self.registry.add_mapping(session_id, doc_id, idx,
-                                      res.entity_type, ph, orig)
+                                      res.entity_type, ph, orig, commit=False)
+        if plan and commit:
+            self.registry.commit()
 
         return RedactResult(text=out_text, session_id=session_id, doc_id=doc_id,
-                            n_replaced=len(plan), restored=restored)
+                            n_replaced=len(plan), restored=restored,
+                            entity_counts=entity_counts, n_whitelisted=skipped)
 
     # ---- 还原 ----
-    def restore(self, text: str, session_id: str, doc_id: str = "default") -> RedactResult:
-        mapping = self.registry.get_restore_map(session_id, doc_id)
+    def restore(self, text: str, session_id: str, doc_id: str = "default",
+                mapping: List[Dict] | Dict[str, str] | None = None,
+                collect_unrestored: bool = True) -> RedactResult:
+        """还原文本中的占位符。
+
+        mapping 可传入已取好的映射 (列表或 占位符->原文 字典), 批量还原时只构建一次。
+        collect_unrestored=False 时跳过"未命中"统计 (批量还原按整篇统计时用)。
+        只扫描文本中实际出现的占位符, 成本与占位符数量成正比, 与映射表大小无关。
+        """
+        if mapping is None:
+            mapping = self.registry.get_restore_map(session_id, doc_id)
+        by_ph = mapping if isinstance(mapping, dict) else \
+            {m["placeholder"]: m["original"] for m in mapping}
+
         out = text
-        restored, unrestored = {}, {}
-        for m in mapping:
-            ph, orig = m["placeholder"], m["original"]
-            if ph in out:
-                out = out.replace(ph, orig)
-                restored[ph] = orig
-            else:
-                unrestored[ph] = orig
+        restored: Dict[str, str] = {}
+        for ph in _PH_RE.findall(text):
+            if ph in restored:
+                continue
+            orig = by_ph.get(ph)
+            if orig is None:
+                continue
+            out = out.replace(ph, orig)
+            restored[ph] = orig
+
+        unrestored = ({ph: orig for ph, orig in by_ph.items() if ph not in restored}
+                      if collect_unrestored else {})
         return RedactResult(text=out, session_id=session_id, doc_id=doc_id,
                             restored=restored, unrestored=unrestored)

@@ -13,6 +13,10 @@ requires-python = ">=3.9"
 dev = [
     "pytest>=7.0",
 ]
+# 可选: 中文分词, 用于校验实体的词边界与词性 (人名/地名精度显著提升)
+segment = [
+    "jieba>=0.42",
+]
 
 [project.scripts]
 presidio-pii = "presidio_pii.cli:main"

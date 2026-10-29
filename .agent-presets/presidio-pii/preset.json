@@ -16,7 +16,8 @@
   "config": {
     "db_path": ".pii_presidio_store/sessions.db",
     "session_scope": "conversation",
-    "supported_extensions": [".txt", ".md", ".docx", ".xlsx", ".pptx"]
+    "supported_extensions": [".txt", ".md", ".docx", ".xlsx", ".pptx"],
+    "whitelist_path": null
   },
   "entity_types": [
     "ID_NUMBER",

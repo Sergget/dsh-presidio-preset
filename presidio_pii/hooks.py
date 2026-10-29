@@ -7,8 +7,9 @@
   - 每次调用均写入结构化 JSONL 日志 (记录发出/接收的原始与转换后内容)。
 
 环境变量:
-  PII_DSH_DB_PATH   覆盖映射库路径
-  PII_DSH_LOG_PATH  覆盖日志路径 (设为 "0" 关闭日志)
+  PII_DSH_DB_PATH    覆盖映射库路径
+  PII_DSH_LOG_PATH   覆盖日志路径 (设为 "0" 关闭日志)
+  PII_DSH_WHITELIST  白名单文件路径 (每行一个关键词, 命中的区域不脱敏)
 """
 from __future__ import annotations
 
@@ -33,10 +34,22 @@ def _db_path() -> Path:
     return Path(os.environ.get("PII_DSH_DB_PATH", _DEFAULT_DB))
 
 
+def _whitelist() -> list:
+    """从 PII_DSH_WHITELIST 指定的文件读取白名单 (每行一个词, # 注释)。"""
+    raw = os.environ.get("PII_DSH_WHITELIST")
+    if not raw:
+        return []
+    fp = Path(raw)
+    if not fp.exists():
+        return []
+    return [ln.strip() for ln in fp.read_text(encoding="utf-8-sig").splitlines()
+            if ln.strip() and not ln.strip().startswith("#")]
+
+
 def _get_engine() -> PresidioPIIEngine:
     global _ENGINE
     if _ENGINE is None:
-        _ENGINE = PresidioPIIEngine(db_path=_db_path())
+        _ENGINE = PresidioPIIEngine(db_path=_db_path(), whitelist=_whitelist())
     return _ENGINE
 
 

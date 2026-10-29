@@ -1,4 +1,5 @@
-"""端到端流程测试: hooks 日志、DSH 模拟器、真实文档检测工具。"""
+"""端到端流程测试: hooks 日志、DSH 模拟器、真实文档检测工具、CLI。"""
+import csv
 import json
 import os
 import sys
@@ -104,3 +105,194 @@ def test_standalone_check_missing_file(hook_env, tmp_path):
     rc = standalone_check.main([str(tmp_path / "nope.txt"),
                                 "--report", str(report_path)])
     assert rc == 1
+
+
+# --------------------------------------------------------------------------- #
+# CLI: 默认输出目录 / CSV 凭据 / -d / -v
+# --------------------------------------------------------------------------- #
+def _make_src(tmp_path):
+    src = tmp_path / "报告.txt"
+    src.write_text("张伟的身份证是110101199003077890\n普通段落。\n", encoding="utf-8")
+    return src
+
+
+def test_cli_redact_writes_mapping_and_session_csv(hook_env, tmp_path):
+    from presidio_pii import cli
+
+    src = _make_src(tmp_path)
+    assert cli.main([str(src)]) == 0          # 裸路径等价于 redact
+
+    out = tmp_path / "报告-redacted" / "报告.txt"
+    assert out.exists()
+    assert "张伟" not in out.read_text(encoding="utf-8")
+
+    mapping_path = out.with_suffix(out.suffix + ".mapping.csv")
+    with mapping_path.open(encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.DictReader(f))
+    assert [r["ptype"] for r in rows] == ["PERSON", "ID_NUMBER"]
+    assert rows[0]["original"] == "张伟"
+    assert rows[0]["placeholder"] == "⟦PII:PERSON:0001⟧"
+
+    meta_path = out.with_suffix(out.suffix + ".session.csv")
+    with meta_path.open(encoding="utf-8-sig", newline="") as f:
+        meta = {row["key"]: row["value"] for row in csv.DictReader(f)}
+    assert meta["doc_id"] == "报告.txt" and meta["session_id"]
+
+
+def test_cli_restore_roundtrip_from_csv_without_db(hook_env, tmp_path):
+    """默认不落映射库, 仅凭 mapping.csv 也能无损还原。"""
+    from presidio_pii import cli
+
+    src = _make_src(tmp_path)
+    original = src.read_text(encoding="utf-8")
+    assert cli.main([str(src)]) == 0
+    assert not (tmp_path / "sessions.db").exists()   # 默认走内存映射库
+
+    redacted = tmp_path / "报告-redacted" / "报告.txt"
+    assert cli.main(["restore", str(redacted)]) == 0
+
+    restored = tmp_path / "报告-restored" / "报告.txt"
+    assert restored.exists()                  # 同级目录, 不嵌套进 -redacted
+    assert restored.read_text(encoding="utf-8") == original
+
+
+def test_cli_multi_unit_restore_has_no_false_warning(hook_env, tmp_path, capsys):
+    """多单元文档: 未命中映射按整篇统计, 不得对每个单元重复报未命中。"""
+    import docx
+    from presidio_pii import cli
+
+    src = tmp_path / "多段.docx"
+    d = docx.Document()
+    d.add_paragraph("张伟的身份证是110101199003077890。")
+    d.add_paragraph("李明电话 13800138000。")
+    d.save(str(src))
+    original = [p.text for p in docx.Document(str(src)).paragraphs]
+
+    assert cli.main([str(src)]) == 0
+    capsys.readouterr()
+
+    assert cli.main(["restore", str(tmp_path / "多段-redacted" / "多段.docx")]) == 0
+    printed = capsys.readouterr().out
+    assert "警告" not in printed
+    restored = docx.Document(str(tmp_path / "多段-restored" / "多段.docx"))
+    assert [p.text for p in restored.paragraphs] == original
+
+
+def test_cli_out_dir_and_verbose(hook_env, tmp_path, capsys):
+    from presidio_pii import cli
+
+    src = _make_src(tmp_path)
+    target = tmp_path / "custom"
+    assert cli.main(["-v", str(src), "-d", str(target)]) == 0
+
+    assert (target / "报告.txt").exists()
+    assert (target / "报告.txt.session.csv").exists()
+    printed = capsys.readouterr().out
+    assert "[verbose]" in printed and "[2/4]" in printed
+
+
+def test_cli_output_and_out_dir_are_exclusive(hook_env, tmp_path):
+    from presidio_pii import cli
+
+    src = _make_src(tmp_path)
+    with pytest.raises(SystemExit):
+        cli.main(["redact", str(src), "-o", str(tmp_path / "a.txt"), "-d", str(tmp_path / "b")])
+
+
+def test_cli_keep_and_whitelist_file(hook_env, tmp_path):
+    from presidio_pii import cli
+
+    src = tmp_path / "报告.txt"
+    src.write_text("张伟和李明的手机号 13800138000\n", encoding="utf-8")
+    wl = tmp_path / "keep.txt"
+    wl.write_text("# 保留产品名\n李明\n", encoding="utf-8")
+
+    assert cli.main([str(src), "--whitelist", str(wl), "--keep", "张伟"]) == 0
+    out = (tmp_path / "报告-redacted" / "报告.txt").read_text(encoding="utf-8")
+    assert "张伟" in out and "李明" in out      # 两个白名单词都保留
+    assert "13800138000" not in out             # 其余照常脱敏
+
+    with (tmp_path / "报告-redacted" / "报告.txt.mapping.csv").open(
+            encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.DictReader(f))
+    assert [r["ptype"] for r in rows] == ["PHONE_NUMBER"]
+
+
+def test_hooks_whitelist_env(hook_env, tmp_path):
+    from presidio_pii import hooks
+
+    wl = tmp_path / "wl.txt"
+    wl.write_text("张伟\n", encoding="utf-8")
+    os.environ["PII_DSH_WHITELIST"] = str(wl)
+    hooks.reset_singleton()
+    try:
+        red = hooks.before_llm("张伟和李明的手机 13800138000", conversation_id="wl-conv")
+        assert "张伟" in red
+        assert "李明" not in red and "13800138000" not in red
+    finally:
+        os.environ.pop("PII_DSH_WHITELIST", None)
+        hooks.reset_singleton()
+
+
+# --------------------------------------------------------------------------- #
+# 文档提取范围: 表格 / 页眉 / pptx 表格
+# --------------------------------------------------------------------------- #
+def test_docx_table_and_header_roundtrip(hook_env, tmp_path):
+    import docx
+    from presidio_pii import cli
+
+    src = tmp_path / "表格.docx"
+    d = docx.Document()
+    d.add_paragraph("正文段落")
+    t = d.add_table(rows=2, cols=2)
+    t.cell(0, 0).text = "姓名"
+    t.cell(0, 1).text = "身份证号"
+    t.cell(1, 0).text = "李芳"
+    t.cell(1, 1).text = "110101199003077890"
+    d.sections[0].header.paragraphs[0].text = "合肥市数据资源局"
+    d.save(str(src))
+
+    assert cli.main([str(src)]) == 0
+    red = docx.Document(str(tmp_path / "表格-redacted" / "表格.docx"))
+    assert "⟦PII:ID_NUMBER:" in red.tables[0].cell(1, 1).text
+    assert "⟦PII:PERSON:" in red.tables[0].cell(1, 0).text
+    assert "⟦PII:ORGANIZATION:" in red.sections[0].header.paragraphs[0].text
+
+    assert cli.main(["restore", str(tmp_path / "表格-redacted" / "表格.docx")]) == 0
+    back = docx.Document(str(tmp_path / "表格-restored" / "表格.docx"))
+    assert back.tables[0].cell(1, 0).text == "李芳"
+    assert back.tables[0].cell(1, 1).text == "110101199003077890"
+    assert back.sections[0].header.paragraphs[0].text == "合肥市数据资源局"
+
+
+def test_pptx_table_is_redacted(hook_env, tmp_path):
+    from pptx import Presentation
+    from pptx.util import Inches
+    from presidio_pii import cli
+
+    src = tmp_path / "汇报.pptx"
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[5])
+    frame = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1)).text_frame
+    frame.text = "负责人：王建国"
+    table = slide.shapes.add_table(2, 2, Inches(1), Inches(3), Inches(4), Inches(1)).table
+    table.cell(0, 0).text = "单位"
+    table.cell(0, 1).text = "电话"
+    table.cell(1, 0).text = "合肥市数据资源局"
+    table.cell(1, 1).text = "13900139000"
+    prs.save(str(src))
+
+    assert cli.main([str(src)]) == 0
+    red = Presentation(str(tmp_path / "汇报-redacted" / "汇报.pptx"))
+    texts = []
+    for s in red.slides:
+        for shape in s.shapes:
+            if shape.has_text_frame:
+                texts.append(shape.text_frame.text)
+            if shape.has_table:
+                for row in shape.table.rows:
+                    for cell in row.cells:
+                        texts.append(cell.text)
+    joined = "\n".join(texts)
+    assert "王建国" not in joined and "13900139000" not in joined
+    assert "⟦PII:ORGANIZATION:" in joined

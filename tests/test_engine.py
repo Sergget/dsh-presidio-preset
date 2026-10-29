@@ -103,6 +103,108 @@ def test_job_title():
 
 
 # --------------------------------------------------------------------------- #
+# 精度回归: 普通词语不得被识别为 PII
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("text", [
+    "内容要求如下",
+    "本项目分为第一部",
+    "资金约 100 万元",
+    "系统已经成熟",
+    "第三方服务",
+    "所有部门都要参与",
+    "按照每个部门的要求",
+    "关键在于第三章",
+    "用户数量达到百万级",
+    "原则上不允许",
+    "成品软件采购",
+    "政协委员履职管理",
+])
+def test_common_words_are_not_pii(text):
+    assert _all_entities(text) == {}, text
+
+
+@pytest.mark.parametrize("text,name", [
+    ("项目负责人：刘志强；", "刘志强"),
+    ("由张三负责该项目的实施", "张三"),
+    ("再查李明, 手机 13800138000", "李明"),
+    ("联系人：高鹏", "高鹏"),
+    ("马晓东、宋佳参加评审", "马晓东"),
+    ("客户张伟, 身份证 110101199003077890", "张伟"),
+])
+def test_person_in_natural_context(text, name):
+    ents = _all_entities(text)
+    assert ents.get(name) == "PERSON", (text, ents)
+
+
+def test_location_province_and_city():
+    ents = _all_entities("合肥市政协信息化平台项目")
+    assert ents.get("合肥市") == "LOCATION"
+
+
+def test_organization_kept_whole_with_location_inside():
+    ents = _all_entities("参照安徽省数据资源管理局的做法")
+    orgs = [k for k, v in ents.items() if v == "ORGANIZATION"]
+    assert any("安徽省数据资源管理局" in o for o in orgs), ents
+
+
+def test_department_word_not_organization():
+    assert "ORGANIZATION" not in _all_entities("所有部门都要参与").values()
+
+
+def test_landline_phone():
+    ents = _all_entities("办公电话 0551-64845129 工作日联系")
+    assert ents.get("0551-64845129") == "PHONE_NUMBER"
+
+
+def test_id_number_with_x_check_digit_does_not_crash():
+    # 校验位为 X 时不得抛异常 (历史 bug: int('X'))
+    ents = _all_entities("证件号 11010119900307789X")
+    assert ents.get("11010119900307789X") == "ID_NUMBER"
+
+
+def test_address_with_direction_and_section():
+    ents = _all_entities("地址：成都市武侯区天府大道北段1700号")
+    assert any(v == "LOCATION" and "天府大道北段1700号" in k for k, v in ents.items()), ents
+
+
+# --------------------------------------------------------------------------- #
+# 白名单: 指定关键词不替换
+# --------------------------------------------------------------------------- #
+def test_whitelist_exact_term(engine):
+    engine.set_whitelist(["张伟"])
+    sid = engine.registry.create_session()
+    rd = engine.redact("张伟和李明开会", sid)
+    assert "张伟" in rd.text          # 白名单词保留
+    assert "李明" not in rd.text      # 其余照常脱敏
+    assert rd.n_whitelisted == 1
+
+
+def test_whitelist_protects_overlapping_entities(engine):
+    engine.set_whitelist(["合肥市数据资源局"])
+    sid = engine.registry.create_session()
+    text = "合肥市数据资源局由王建国负责"
+    rd = engine.redact(text, sid)
+    assert "合肥市数据资源局" in rd.text   # 整体保留, 其中的 "合肥市" 不被切出
+    assert "王建国" not in rd.text
+
+
+def test_whitelist_does_not_block_other_text(engine):
+    engine.set_whitelist(["张伟"])
+    sid = engine.registry.create_session()
+    rd = engine.redact("李明的手机号是13800138000", sid)
+    assert rd.n_replaced == 2
+    assert rd.n_whitelisted == 0
+
+
+def test_whitelist_roundtrip_still_lossless(engine):
+    engine.set_whitelist(["张伟"])
+    sid = engine.registry.create_session()
+    text = "张伟和李明的电话 13800138000"
+    rd = engine.redact(text, sid)
+    assert engine.restore(rd.text, sid).text == text
+
+
+# --------------------------------------------------------------------------- #
 # 引擎 redact/restore
 # --------------------------------------------------------------------------- #
 DEMO_TEXT = """张伟是中国银行北京市朝阳区支行行长, 身份证 110101199003077890,

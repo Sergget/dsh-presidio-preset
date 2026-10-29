@@ -30,6 +30,26 @@
 | `db_path` | `<repo>/.pii_presidio_store/sessions.db` | 映射库位置 |
 | `session_scope` | `conversation` | 会话粒度 |
 | `supported_extensions` | txt/md/docx/xlsx/pptx | 文档格式 |
+| `whitelist_path` | `null` | 白名单文件（每行一个关键词，`#` 注释）；等价于环境变量 `PII_DSH_WHITELIST` |
+
+## 白名单
+
+命中白名单的区域不脱敏；与白名单重叠的实体一并跳过（白名单写 `合肥市数据资源局` 时，
+其中的 `合肥市` 也不会被单独脱敏）。
+
+```bash
+# 环境变量指向白名单文件
+export PII_DSH_WHITELIST=/path/to/whitelist.txt
+```
+
+文件格式：
+
+```
+# 每行一个关键词
+国家数据局
+智数科技
+合肥市数据资源局
+```
 
 ## 识别实体
 
