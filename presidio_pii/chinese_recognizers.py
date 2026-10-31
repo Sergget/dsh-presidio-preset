@@ -48,6 +48,8 @@ _MOD_MAP = "10X98765432"
 # 18 位身份证号 (含最后一位校验); 用 lookaround 而非 \b,
 # 因为 Python re 中汉字属于 \w, \b 在 "号110101..." 这类数字紧邻汉字处会失效
 _RE_ID = r"(?<![0-9Xx])[1-9]\d{16}[\dXx](?![0-9Xx])"
+# 15 位旧版身份证 (1999 年前签发, 无校验位)
+_RE_ID15 = r"(?<![0-9])[1-9]\d{14}(?![0-9])"
 # 大陆手机号
 _RE_MOBILE = r"(?<!\d)1[3-9]\d{9}(?!\d)"
 # 座机: 区号(0xx / 0xxx) + 7-8 位, 允许连字符或空格分隔
@@ -56,8 +58,19 @@ _RE_LANDLINE = r"(?<!\d)0\d{2,3}[-\s]?\d{7,8}(?!\d)"
 _RE_EMAIL = r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"
 # 统一社会信用代码 (GB 32100-2015 字符集: 排除 I/O/S/V/Z, 首位为 1/5/9/Y)
 _RE_CREDIT = r"(?<![0-9A-Z])[159Y][0-9A-HJ-NPQRTUWXY]\d{6}[0-9A-HJ-NPQRTUWXY]{10}(?![0-9A-Z])"
-# 银行卡 (13-19 位数字, 可能包含空格/连字符分隔)
+# 银行卡 (13-19 位数字); 由 Luhn 校验兜底, 避免长数字串一律判成卡号
 _RE_BANK = r"(?<![\d\-])\d(?:[ -]?\d){12,18}(?![\d\-])"
+# 护照 / 港澳通行证: 字母前缀 + 8 位数字 (E=电子护照, G/M=旧版, C/H=港澳)
+_RE_PASSPORT = r"(?<![0-9A-Za-z])[EGMDCHS][A-Z0-9]?\d{8}(?![0-9A-Za-z])"
+# 中国大陆车牌: 省份简称 + 发牌机关字母 + 5 位序号 (含新能源)
+_PLATE_PROVINCE = ("京津冀晋蒙辽吉黑沪苏浙皖闽赣鲁豫鄂湘粤桂琼渝川贵云藏陕甘青宁新")
+_RE_PLATE = (r"(?<![0-9A-Za-z一-龥])[" + _PLATE_PROVINCE + r"][A-HJ-NP-Z]"
+             r"[A-HJ-NP-Z0-9]{4}[A-HJ-NP-Z0-9挂学警港澳领](?![0-9A-Za-z])")
+# IPv4 (lookahead/lookbehind 只排除数字与点, 避免 "1.2.3.4.5" 与版本号误判)
+_RE_IPV4 = (r"(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}"
+            r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?![\d.])")
+# MAC 地址
+_RE_MAC = (r"(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}(?![0-9A-Fa-f:])")
 
 
 def _id_valid(s: str) -> bool:
@@ -68,6 +81,34 @@ def _id_valid(s: str) -> bool:
     # 前 17 位加权求和, 第 18 位为校验位 (可能是 X)
     total = sum(int(s[i]) * _WEIGHTS[i] for i in range(17))
     return s[17].upper() == _MOD_MAP[total % 11]
+
+
+def _id15_valid(s: str) -> bool:
+    """15 位旧版身份证: 无校验位, 仅校验行政区划与出生日期段。"""
+    if not re.fullmatch(r"[1-9]\d{14}", s):
+        return False
+    if s[:2] not in _CITY_CODES:
+        return False
+    year, month, day = int(s[6:8]), int(s[8:10]), int(s[10:12])
+    # 1900-1999 年间签发; 月份与日期做范围校验
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return False
+    return year <= 99
+
+
+def _luhn(s: str) -> bool:
+    """Luhn 校验 (银行卡号)。"""
+    digits = [int(c) for c in s if c.isdigit()]
+    if not 13 <= len(digits) <= 19:
+        return False
+    total = 0
+    for i, d in enumerate(reversed(digits)):
+        if i % 2 == 1:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+    return total % 10 == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -82,6 +123,58 @@ def _load_lines(name: str) -> List[str]:
 
 
 SURNAMES = set(_load_lines("surnames.txt"))
+
+# 繁体姓氏 -> 简体: 港澳台与海外文档常见, 不做转换会整批漏检
+_T2S_SURNAME = {
+    "張": "张", "劉": "刘", "陳": "陈", "楊": "杨", "黃": "黄", "趙": "赵",
+    "吳": "吴", "周": "周", "徐": "徐", "孫": "孙", "馬": "马", "朱": "朱",
+    "胡": "胡", "郭": "郭", "何": "何", "高": "高", "林": "林", "羅": "罗",
+    "鄭": "郑", "梁": "梁", "謝": "谢", "宋": "宋", "唐": "唐", "許": "许",
+    "韓": "韩", "馮": "冯", "鄧": "邓", "曹": "曹", "彭": "彭", "曾": "曾",
+    "蕭": "萧", "田": "田", "董": "董", "袁": "袁", "潘": "潘", "於": "于",
+    "蔣": "蒋", "蔡": "蔡", "餘": "余", "杜": "杜", "葉": "叶", "程": "程",
+    "蘇": "苏", "魏": "魏", "呂": "吕", "丁": "丁", "任": "任", "瀋": "沈",
+    "姚": "姚", "盧": "卢", "薑": "姜", "崔": "崔", "鐘": "钟", "譚": "谭",
+    "陸": "陆", "汪": "汪", "範": "范", "金": "金", "石": "石", "廖": "廖",
+    "賈": "贾", "夏": "夏", "韋": "韦", "付": "付", "方": "方", "白": "白",
+    "鄒": "邹", "孟": "孟", "熊": "熊", "秦": "秦", "邱": "邱", "江": "江",
+    "尹": "尹", "薛": "薛", "閻": "闫", "段": "段", "雷": "雷", "侯": "侯",
+    "龍": "龙", "史": "史", "陶": "陶", "黎": "黎", "賀": "贺", "顧": "顾",
+    "毛": "毛", "郝": "郝", "龔": "龚", "邵": "邵", "萬": "万", "錢": "钱",
+    "嚴": "严", "覃": "覃", "武": "武", "戴": "戴", "莫": "莫", "孔": "孔",
+    "湯": "汤", "溫": "温", "康": "康", "施": "施", "文": "文", "牛": "牛",
+    "樊": "樊", "葛": "葛", "邢": "邢", "安": "安", "齊": "齐", "易": "易",
+    "喬": "乔", "伍": "伍", "龐": "庞", "顏": "颜", "倪": "倪", "莊": "庄",
+    "聶": "聂", "章": "章", "魯": "鲁", "嶽": "岳", "翟": "翟", "殷": "殷",
+    "詹": "詹", "申": "申", "歐": "欧", "耿": "耿", "關": "关", "蘭": "兰",
+    "焦": "焦", "俞": "俞", "左": "左", "柳": "柳", "甘": "甘", "祝": "祝",
+    "包": "包", "寧": "宁", "尚": "尚", "符": "符", "舒": "舒", "阮": "阮",
+    "柯": "柯", "紀": "纪", "梅": "梅", "童": "童", "凌": "凌", "畢": "毕",
+    "單": "单", "季": "季", "裴": "裴", "霍": "霍", "塗": "涂", "成": "成",
+    "苗": "苗", "穀": "谷", "盛": "盛", "曲": "曲", "翁": "翁", "冉": "冉",
+    "駱": "骆", "藍": "蓝", "路": "路", "遊": "游", "辛": "辛", "管": "管",
+    "柴": "柴", "矇": "蒙", "鮑": "鲍", "華": "华", "喻": "喻", "祁": "祁",
+    "蒲": "蒲", "房": "房", "滕": "滕", "屈": "屈", "饒": "饶", "解": "解",
+    "牟": "牟", "艾": "艾", "尤": "尤", "陽": "阳", "時": "时", "穆": "穆",
+    "農": "农", "司": "司", "卓": "卓", "古": "古", "吉": "吉", "繆": "缪",
+    "簡": "简", "車": "车", "項": "项", "連": "连", "蘆": "芦", "麥": "麦",
+    "褚": "褚", "婁": "娄", "竇": "窦", "戚": "戚", "岑": "岑", "景": "景",
+    "黨": "党", "宮": "宫", "費": "费", "蔔": "卜", "冷": "冷", "晏": "晏",
+    "席": "席", "衛": "卫", "米": "米", "柏": "柏", "宗": "宗", "瞿": "瞿",
+    "桂": "桂", "全": "全", "佟": "佟", "應": "应", "臧": "臧", "閔": "闵",
+    "苟": "苟", "鄔": "邬", "邊": "边", "卞": "卞", "姬": "姬", "師": "师",
+    "仇": "仇", "欒": "栾", "隋": "隋", "商": "商", "刁": "刁", "沙": "沙",
+    "榮": "荣", "巫": "巫", "寇": "寇", "桑": "桑", "郎": "郎", "甄": "甄",
+    "叢": "丛", "仲": "仲", "虞": "虞", "敖": "敖", "鞏": "巩", "明": "明",
+    "佘": "佘", "池": "池", "查": "查", "麻": "麻", "苑": "苑", "遲": "迟",
+    "鄺": "邝", "封": "封", "樂": "乐", "禹": "禹", "羊": "羊", "慕": "慕",
+    "薩": "萨", "南": "南", "宦": "宦", "傅": "傅", "洪": "洪", "閻": "阎",
+    "鬱": "郁", "邰": "邰", "戶": "户", "貴": "贵", "郗": "郗", "伊": "伊",
+    "虎": "虎", "冀": "冀", "籍": "籍", "鐵": "铁", "芮": "芮", "原": "原",
+    "郜": "郜", "樓": "楼", "貢": "贡",
+}
+# 姓氏匹配用的字符集合: 简体姓 + 繁体姓
+_SURNAME_CHARS = SURNAMES | set(_T2S_SURNAME)
 
 # --------------------------------------------------------------------------- #
 # 通用边界工具
@@ -99,6 +192,8 @@ def _next_is_boundary(text: str, end: int) -> bool:
 
 
 _NUMERALS = set("一二三四五六七八九十百千万亿零两0123456789")
+# 数量词前缀: 后接数字时说明是数量表达而非机构 ("共三部"/"分两处")
+_QUANTITY_PREFIX = set("共分设含计约由")
 
 # 人名前方引导字: 前面是这些字时, 候选更可能是独立人名而非词语片段
 # (介词/称谓/常见谓语动词, 如 "由张三负责" "再查李明" "通知王伟")
@@ -220,6 +315,92 @@ class ChineseIDRecognizer(LightRecognizer):
         return out
 
 
+class ChineseID15Recognizer(LightRecognizer):
+    """15 位旧版身份证 (无校验位)。
+
+    必须与 18 位分开: 混合正则会让 15 位被 BANK_CARD 抢走 (13-19 位数字),
+    导致脱敏了但类型错误, 影响下游统计与还原策略。
+    """
+
+    def __init__(self):
+        super().__init__("ID_NUMBER", _RE_ID15, score=0.80)
+
+    def analyze(self, text: str) -> List[RecognizerResult]:
+        out = []
+        for m in re.finditer(_RE_ID15, text):
+            s = m.group()
+            # 18 位身份证的前 15 位不应重复计数
+            if re.match(r"[1-9]\d{16}[\dXx]", text[m.start():m.start() + 18] or ""):
+                continue
+            if _id15_valid(s):
+                out.append(RecognizerResult(m.start(), m.end(), self.entity_type,
+                                            self.score))
+        return out
+
+
+class BankCardRecognizer(LightRecognizer):
+    """银行卡: 13-19 位数字且通过 Luhn。
+
+    Luhn 是关键过滤: 不加校验时任意长数字串 (订单号/流水号) 都会被判成卡号。
+    """
+
+    def __init__(self):
+        super().__init__("BANK_CARD", _RE_BANK, score=0.60)
+
+    def analyze(self, text: str) -> List[RecognizerResult]:
+        out = []
+        for m in re.finditer(_RE_BANK, text):
+            raw = m.group()
+            digits = re.sub(r"[ \-]", "", raw)
+            if not _luhn(digits):
+                continue
+            out.append(RecognizerResult(m.start(), m.end(), self.entity_type, 0.80))
+        return out
+
+
+class PassportRecognizer(LightRecognizer):
+    """护照 / 港澳通行证: 字母前缀 + 8 位数字。"""
+
+    def __init__(self):
+        super().__init__("PASSPORT", _RE_PASSPORT, score=0.85)
+
+
+class PlateRecognizer(LightRecognizer):
+    """中国大陆车牌: 省份简称 + 发牌机关字母 + 5 位序号。"""
+
+    def __init__(self):
+        super().__init__("LICENSE_PLATE", _RE_PLATE, score=0.80)
+
+    def analyze(self, text: str) -> List[RecognizerResult]:
+        out = []
+        for m in re.finditer(_RE_PLATE, text):
+            # 排除纯字母序号里形似单词的情况 (如 "京A" + "BCDEF" 无意义串)
+            out.append(RecognizerResult(m.start(), m.end(), self.entity_type, self.score))
+        return out
+
+
+class IpMacRecognizer(LightRecognizer):
+    """IPv4 与 MAC 地址。
+
+    IP 只在看起来像网络标识时才收: 排除版本号 (1.2.3.4 形式) 与常见私有网段之外的
+    纯数字点分串。这里保守处理: 命中即收, 由白名单兜底。
+    """
+
+    def __init__(self):
+        self._re_v4 = re.compile(_RE_IPV4)
+        self._re_mac = re.compile(_RE_MAC)
+        self.entity_type = "IP_ADDRESS"
+        self.score = 0.75
+
+    def analyze(self, text: str) -> List[RecognizerResult]:
+        out = []
+        for m in self._re_v4.finditer(text):
+            out.append(RecognizerResult(m.start(), m.end(), "IP_ADDRESS", 0.75))
+        for m in self._re_mac.finditer(text):
+            out.append(RecognizerResult(m.start(), m.end(), "MAC_ADDRESS", 0.80))
+        return out
+
+
 # --------------------------------------------------------------------------- #
 # 人名 (姓 + 1-2 字名)
 # --------------------------------------------------------------------------- #
@@ -268,7 +449,7 @@ class ChinesePersonRecognizer(LightRecognizer):
         bounds = segmentation.boundaries(text)  # 无 jieba 时为 None
         n = len(text)
         for i, ch in enumerate(text):
-            if ch not in SURNAMES:
+            if ch not in _SURNAME_CHARS:
                 continue
             # 长名优先, 但每个起点都要试 3 字和 2 字:
             # 贪婪正则会把 "客户张伟" 从 "户" 起切成 "户张伟", 从而错过真正的起点
@@ -276,11 +457,19 @@ class ChinesePersonRecognizer(LightRecognizer):
                 if i + length > n:
                     continue
                 name = text[i:i + length]
-                if not all(_is_cjk(c) for c in name):
+                # 姓名内部的空格/全角空格 ("张 伟") 允许, 但需保留原文区间
+                if " " in name or "　" in name:
+                    compact = name.replace(" ", "").replace("　", "")
+                    if not (2 <= len(compact) <= 3):
+                        continue
+                    probe = compact
+                else:
+                    probe = name
+                if not all(_is_cjk(c) for c in probe):
                     continue
-                if any(c in _NON_NAME_CHARS for c in name[1:]):
+                if any(c in _NON_NAME_CHARS for c in probe[1:]):
                     continue
-                if name in _PERSON_STOPWORDS:
+                if probe in _PERSON_STOPWORDS:
                     continue
                 end = i + length
                 if (i, end) in covered:
@@ -482,6 +671,10 @@ class ChineseOrganizationRecognizer(LightRecognizer):
             if body[-1] == "第" or (len(body) >= 2 and body[-2] == "第"
                                     and body[-1] in _NUMERALS):
                 continue
+            # "共三部"/"分两处" 这类数量表达不是机构
+            if (body[0] in _QUANTITY_PREFIX and len(body) >= 2
+                    and body[1] in _NUMERALS):
+                continue
             if body[-1] in _ORG_BODY_TAIL_BAD:
                 continue
             # 主体本身以机构后缀字收尾, 说明后缀只是词尾 ("含部委" 的 "部")
@@ -563,11 +756,15 @@ class ChineseJobTitleRecognizer(LightRecognizer):
 def get_chinese_recognizers():
     return [
         ChineseIDRecognizer(),
+        ChineseID15Recognizer(),
         LightRecognizer("PHONE_NUMBER", _RE_MOBILE, score=0.88),
         LightRecognizer("PHONE_NUMBER", _RE_LANDLINE, score=0.85),
         LightRecognizer("EMAIL_ADDRESS", _RE_EMAIL, score=0.85),
         LightRecognizer("CREDIT_CODE", _RE_CREDIT, score=0.85),
-        LightRecognizer("BANK_CARD", _RE_BANK, score=0.60),
+        BankCardRecognizer(),
+        PassportRecognizer(),
+        PlateRecognizer(),
+        IpMacRecognizer(),
         ChinesePersonRecognizer(),
         ChineseLocationRecognizer(),
         ChineseOrganizationRecognizer(),

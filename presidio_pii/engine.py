@@ -16,6 +16,7 @@ from typing import Dict, List
 
 from .chinese_recognizers import RecognizerResult, get_chinese_recognizers
 from .db import SessionRegistry
+from .normalize import NormalizedText
 
 PH_OPEN, PH_CLOSE = "⟦", "⟧"
 _PH_RE = re.compile(r"⟦PII:[A-Z_]+:\d+⟧")
@@ -27,12 +28,13 @@ def count_placeholders(text: str) -> int:
 
 # 实体优先级 (重叠冲突时使用: 数字越小优先级越高)
 # 裁决顺序: 先取更长的实体 ("安徽省数据资源管理局" 不被其中的 "安徽省" 切碎),
-# 等长时再按本优先级 — 人名高于机构名 (防止人名被机构名整体吞掉),
-# 地名高于人名 (地名 "北京市朝阳区" 比误切的人名更精确),
-# BANK_CARD 正则最宽松, 在数字类实体中优先级最低
-_PRIO = {"ID_NUMBER": 0, "CREDIT_CODE": 1, "PHONE_NUMBER": 2, "EMAIL_ADDRESS": 3,
-         "BANK_CARD": 4, "LOCATION": 5, "PERSON": 6, "JOB_TITLE": 7,
-         "ORGANIZATION": 8}
+# 等长时再按本优先级 — 证件号优先于银行卡 (15 位身份证不应被判成卡号),
+# 人名高于机构名 (防止人名被机构名整体吞掉),
+# 地名高于人名 (地名 "北京市朝阳区" 比误切的人名更精确)
+_PRIO = {"ID_NUMBER": 0, "CREDIT_CODE": 1, "PASSPORT": 2, "PHONE_NUMBER": 3,
+         "EMAIL_ADDRESS": 4, "LICENSE_PLATE": 5, "BANK_CARD": 6, "LOCATION": 7,
+         "PERSON": 8, "JOB_TITLE": 9, "ORGANIZATION": 10,
+         "IP_ADDRESS": 11, "MAC_ADDRESS": 12}
 
 
 @dataclass
@@ -85,12 +87,29 @@ class PresidioPIIEngine:
 
     # ---- 分析 ----
     def analyze(self, text: str) -> List[RecognizerResult]:
-        results = []
+        """识别文本中的 PII, 返回按文本顺序排列的结果。
+
+        先在归一化文本上识别 (折叠全角字符与数字间插值), 再把坐标转回原文,
+        因此 "１３８００１３８０００"、"138 0013 8000" 这类写法也能命中,
+        且替换的是原文片段。
+        """
+        if not text:
+            return []
+        norm = NormalizedText(text)
+        probe = norm.text if norm.changed else text
+        results: List[RecognizerResult] = []
         for rec in self.recognizers:
-            results.extend(rec.analyze(text))
+            results.extend(rec.analyze(probe))
+        if norm.changed:
+            mapped = []
+            for r in results:
+                start, end = norm.back(r.start, r.end)
+                if start < 0 or end > len(text) or start >= end:
+                    continue
+                mapped.append(RecognizerResult(start, end, r.entity_type, r.score))
+            results = mapped
         # 去重 & 冲突处理
-        results = self._resolve_overlaps(results)
-        return results
+        return self._resolve_overlaps(results)
 
     @staticmethod
     def _resolve_overlaps(results: List[RecognizerResult]) -> List[RecognizerResult]:
