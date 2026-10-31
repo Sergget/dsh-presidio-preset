@@ -6,7 +6,8 @@ A local, lightweight, reversible PII (Personally Identifiable Information) de-id
 
 ## Features
 
-- **Multi-Entity Recognition**: Identifies Chinese names, ID cards (18-digit with checksum and legacy 15-digit), mobile and landline numbers, emails, unified social credit codes, bank cards (Luhn-checked), passports, license plates, IP/MAC addresses, province/city/county-level administrative regions (`LOCATION`), organizations (`ORGANIZATION`), and job titles (`JOB_TITLE`).
+- **Multi-Entity Recognition**: Identifies Chinese names, ID cards (18-digit with checksum and legacy 15-digit), mobile and landline numbers, emails, unified social credit codes, bank cards (Luhn-checked; failing checksums are kept at lower confidence rather than dropped), passports, license plates, IP/MAC addresses, province/city/county-level administrative regions (`LOCATION`), organizations (`ORGANIZATION`), and job titles (`JOB_TITLE`).
+- **Custom Rules**: extend recognition with JSON regex templates or Python code rules — `--rules FILE`, `PII_DSH_CUSTOM_RULES`, or `config.custom_rules_path` in the DSH preset. See [Custom Rules](#custom-rules).
 - **Variant Tolerant**: full-width digits and letters, separators inside numbers (`138 0013 8000`), line-broken IDs and names with inner spaces are normalized before matching, so non-standard formatting is still redacted — and restoration still maps back to the original text.
 - **Boundary-Aware Filtering**: every match must sit on a word boundary, so mid-word fragments are rejected (`容要求` out of `内容要求`, `所有部` out of `所有部门`, `委员` out of `政协委员`). With the optional jieba segmenter installed, candidates must also align with token boundaries and POS tags (`nr` for names, `ns` for places), which removes nearly all false positives.
 - **Reversible Anonymization**: Replaces sensitive data with collision-resistant Unicode placeholders (e.g., `⟦PII:ID_NUMBER:0001⟧`).
@@ -52,11 +53,33 @@ by default (no per-row disk writes); pass `--session` to use the persistent SQLi
 when one session must span several files. The DSH preset keeps its own storage format and
 is unaffected.
 
+## Custom Rules
+
+Business identifiers outside the built-in entity set (employee IDs, member numbers,
+order numbers) can be added without touching engine code. Two template kinds, mixed freely:
+
+- **JSON regex templates** — `pattern`, `entity_type`, optional `score`, `context_hint`,
+  `negative_hint`, `validator`.
+- **Python code rules** — a `.py` file exposing `analyze(text) -> [(start, end[, score])]`
+  plus optional `ENTITY_TYPE` / `SCORE`.
+
+```bash
+export PII_DSH_CUSTOM_RULES=/path/rules.json;/path/order_rule.py
+python -m presidio_pii.cli redact doc.docx --rules rules.json
+```
+
+Custom rules match the original text, take part in whitelist exemption, overlap
+arbitration and placeholder restoration exactly like built-in recognizers. Rules passed
+explicitly via `--rules` are loaded strictly: a missing file or an invalid rule exits
+non-zero instead of silently redacting without them. See
+[`.agent-presets/presidio-pii/README.md`](.agent-presets/presidio-pii/README.md#自定义识别规则)
+for the full field reference and agent workflow.
+
 ## Testing
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/ -v                          # 23 regression cases
+pytest tests/ -v                          # 104 regression cases
 
 # Check real documents without DSH (leak check + lossless restore + zero placeholders, JSON report)
 python tools/standalone_check.py report.docx roster.xlsx

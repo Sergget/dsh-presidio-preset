@@ -6,7 +6,8 @@
 
 ## 特性
 
-- **多实体识别**：中文人名、身份证号（18 位含校验位、15 位旧版）、手机与座机号、邮箱、统一社会信用代码、银行卡（Luhn 校验）、护照、车牌号、IP/MAC 地址、省/市/县级行政区（`LOCATION`）、组织机构（`ORGANIZATION`）以及职位（`JOB_TITLE`）。
+- **多实体识别**：中文人名、身份证号（18 位含校验位、15 位旧版）、手机与座机号、邮箱、统一社会信用代码、银行卡（Luhn 校验；校验失败降级保留而非丢弃）、护照、车牌号、IP/MAC 地址、省/市/县级行政区（`LOCATION`）、组织机构（`ORGANIZATION`）以及职位（`JOB_TITLE`）。
+- **自定义规则**：用 JSON 正则模板或 Python 代码规则扩展识别——CLI 的 `--rules FILE`、环境变量 `PII_DSH_CUSTOM_RULES`，或 DSH preset 的 `config.custom_rules_path`。详见[自定义规则](#自定义规则)。
 - **写法容错**：全角数字字母、数字内插值（`138 0013 8000`）、换行截断的证件号、带空格的姓名，识别前统一归一化，非标准写法同样能命中，且还原仍映射回原文。
 - **词边界过滤**：每个命中都必须落在词边界上，词内片段一律丢弃（`内容要求` 里的 `容要求`、`所有部门` 里的 `所有部`、`政协委员` 里的 `委员`）。装上可选的 jieba 分词后，候选还须与分词边界对齐并符合词性（人名 `nr`、地名 `ns`），几乎消除误报。
 - **可逆脱敏**：用抗碰撞的 Unicode 占位符替换敏感数据（如 `⟦PII:ID_NUMBER:0001⟧`）。
@@ -49,11 +50,31 @@ python -m presidio_pii.cli restore report-redacted/report.docx
 CLI 默认使用内存映射库 (不逐条写盘); 需要让同一会话跨多个文件时, 加 `--session` 走持久化
 SQLite 映射库。DSH preset 使用自己的落盘格式, 不受影响。
 
+## 自定义规则
+
+内置实体覆盖不到的业务标识符 (工号、会员号、订单号等) 无需改引擎源码即可扩展。
+两种模板可混用:
+
+- **JSON 正则模板** — `pattern`、`entity_type`, 可选 `score`、`context_hint`、
+  `negative_hint`、`validator`。
+- **Python 代码规则** — `.py` 文件提供 `analyze(text) -> [(start, end[, score])]`,
+  以及可选的 `ENTITY_TYPE` / `SCORE`。
+
+```bash
+export PII_DSH_CUSTOM_RULES=/path/rules.json;/path/order_rule.py
+python -m presidio_pii.cli redact 文档.docx --rules rules.json
+```
+
+自定义规则在原文上匹配, 与内置识别器一样享受白名单豁免、重叠仲裁与占位符还原。
+`--rules` 显式指定的规则走严格加载: 文件缺失或规则非法时以非零退出码中止,
+不会在"规则没生效"的情况下静默继续脱敏。完整字段说明与 agent 生成规则的工作流见
+[`.agent-presets/presidio-pii/README.md`](.agent-presets/presidio-pii/README.md#自定义识别规则)。
+
 ## 测试
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/ -v                          # 23 个回归用例
+pytest tests/ -v                          # 104 个回归用例
 
 # 无 DSH 检测真实文档 (泄漏检查 + 还原无损 + 占位符清零, JSON 报告)
 python tools/standalone_check.py 报告.docx 名单.xlsx
