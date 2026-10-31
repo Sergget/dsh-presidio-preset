@@ -74,7 +74,7 @@ python -m presidio_pii.cli redact 文档.docx --rules rules.json
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/ -v                          # 104 个回归用例
+pytest tests/ -v                          # 105 个回归用例
 
 # 无 DSH 检测真实文档 (泄漏检查 + 还原无损 + 占位符清零, JSON 报告)
 python tools/standalone_check.py 报告.docx 名单.xlsx

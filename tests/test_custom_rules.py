@@ -241,6 +241,26 @@ class IntegrationTest(unittest.TestCase):
                            "-d", str(td / "out")])
             self.assertEqual(rc, 1)
 
+    def test_custom_rule_docx_roundtrip(self):
+        """自定义规则在 docx handler 上同样生效, 且写回后可无损还原。"""
+        from docx import Document
+        from presidio_pii import cli
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            (td / "rules.json").write_text(
+                json.dumps(self.RULES, ensure_ascii=False), encoding="utf-8")
+            doc = Document()
+            doc.add_paragraph("员工工号：A123456，请核实")
+            doc.save(td / "t.docx")
+            self.assertEqual(cli.main(["redact", str(td / "t.docx"), "--rules",
+                                       str(td / "rules.json"), "-d", str(td / "out")]), 0)
+            redacted = Document(td / "out" / "t.docx").paragraphs[0].text
+            self.assertIn("⟦PII:EMPLOYEE_ID:0001⟧", redacted)
+            self.assertEqual(cli.main(["restore", str(td / "out" / "t.docx"),
+                                       "-d", str(td / "restored")]), 0)
+            restored = Document(td / "restored" / "t.docx").paragraphs[0].text
+            self.assertEqual(restored, "员工工号：A123456，请核实")
+
     def test_hooks_read_preset_custom_rules(self):
         """preset.json 的 config.custom_rules_path 应生效 (文档承诺的接入面)。"""
         from presidio_pii import hooks

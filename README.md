@@ -79,7 +79,7 @@ for the full field reference and agent workflow.
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/ -v                          # 104 regression cases
+pytest tests/ -v                          # 105 regression cases
 
 # Check real documents without DSH (leak check + lossless restore + zero placeholders, JSON report)
 python tools/standalone_check.py report.docx roster.xlsx
