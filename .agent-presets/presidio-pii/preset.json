@@ -18,7 +18,8 @@
     "session_scope": "conversation",
     "supported_extensions": [".txt", ".md", ".docx", ".xlsx", ".pptx"],
     "whitelist_path": null,
-    "custom_rules_path": null
+    "custom_rules_path": null,
+    "rules_reload_interval": 1.0
   },
   "entity_types": [
     "ID_NUMBER",

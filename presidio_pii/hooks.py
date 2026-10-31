@@ -11,11 +11,12 @@
   PII_DSH_LOG_PATH   覆盖日志路径 (设为 "0" 关闭日志)
   PII_DSH_WHITELIST  白名单文件路径 (每行一个关键词, 命中的区域不脱敏)
   PII_DSH_CUSTOM_RULES  自定义规则文件 (分号分隔多个, .json=正则模板, .py=代码规则)
+  PII_DSH_RULES_RELOAD  规则热更新检查间隔 (秒, 默认 1; 0/off 关闭自动检查)
   PII_DSH_PRESET     覆盖 preset.json 路径
 
 配置优先级: 环境变量 > preset.json 的 config 段 > 内置默认值。
-preset.json 支持 db_path / whitelist_path / custom_rules_path 三个字段,
-相对路径按仓库根目录解析。
+preset.json 支持 db_path / whitelist_path / custom_rules_path /
+rules_reload_interval 四个字段, 相对路径按仓库根目录解析。
 """
 from __future__ import annotations
 
@@ -91,6 +92,35 @@ def _custom_rules_spec() -> str | None:
             or _preset_path("custom_rules_path"))
 
 
+def _parse_interval(raw, default: float = 1.0) -> float:
+    """解析热更新间隔: 秒数, 0/off/false 表示关闭自动检查。"""
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        return default if raw else 0.0
+    if isinstance(raw, (int, float)):
+        return max(0.0, float(raw))
+    text = str(raw).strip().lower()
+    if not text:
+        return default
+    if text in ("0", "off", "false", "no", "none"):
+        return 0.0
+    try:
+        return max(0.0, float(text))
+    except ValueError:
+        print(f"[pii] 无法解析规则热更新间隔 {raw!r}, 使用默认 {default}s",
+              file=sys.stderr)
+        return default
+
+
+def _rules_reload_interval() -> float:
+    """规则热更新检查间隔: 环境变量 > preset 配置 > 默认 1 秒。"""
+    raw = os.environ.get("PII_DSH_RULES_RELOAD")
+    if raw is None:
+        raw = _preset_config().get("rules_reload_interval")
+    return _parse_interval(raw)
+
+
 def _whitelist() -> list:
     """从白名单文件读取关键词 (每行一个词, # 注释)。"""
     raw = _whitelist_file()
@@ -106,11 +136,21 @@ def _whitelist() -> list:
 def _get_engine() -> PresidioPIIEngine:
     global _ENGINE
     if _ENGINE is None:
-        # 自定义规则来源已在此处合并 (env > preset), 显式传入空列表以避免重复加载
-        from .custom_rules import load_custom_rules
-        _ENGINE = PresidioPIIEngine(db_path=_db_path(), whitelist=_whitelist(),
-                                    custom_rules=load_custom_rules(_custom_rules_spec()))
+        # 传规则来源字符串而非已加载列表, 让引擎能按文件签名热更新;
+        # 来源已在此处合并 (env > preset)
+        _ENGINE = PresidioPIIEngine(
+            db_path=_db_path(), whitelist=_whitelist(),
+            custom_rules=_custom_rules_spec(),
+            rules_check_interval=_rules_reload_interval())
     return _ENGINE
+
+
+def reload_rules(force: bool = True) -> int:
+    """显式重载自定义规则, 返回当前规则条数。
+
+    agent 改完规则文件后可立即调用; force=False 时仍受检查间隔节流。
+    """
+    return _get_engine().reload_custom_rules(force=force)
 
 
 def get_journal() -> JsonlJournal | None:

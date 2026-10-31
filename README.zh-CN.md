@@ -55,10 +55,10 @@ SQLite 映射库。DSH preset 使用自己的落盘格式, 不受影响。
 内置实体覆盖不到的业务标识符 (工号、会员号、订单号等) 无需改引擎源码即可扩展。
 两种模板可混用:
 
-- **JSON 正则模板** — `pattern`、`entity_type`, 可选 `score`、`context_hint`、
-  `negative_hint`、`validator`。
+- **JSON 正则模板** — `pattern`、`entity_type`, 可选 `score`、`priority`、
+  `context_hint`、`negative_hint`、`validator`。
 - **Python 代码规则** — `.py` 文件提供 `analyze(text) -> [(start, end[, score])]`,
-  以及可选的 `ENTITY_TYPE` / `SCORE`。
+  以及可选的 `ENTITY_TYPE` / `SCORE` / `PRIORITY`。
 
 ```bash
 export PII_DSH_CUSTOM_RULES=/path/rules.json;/path/order_rule.py
@@ -67,14 +67,22 @@ python -m presidio_pii.cli redact 文档.docx --rules rules.json
 
 自定义规则在原文上匹配, 与内置识别器一样享受白名单豁免、重叠仲裁与占位符还原。
 `--rules` 显式指定的规则走严格加载: 文件缺失或规则非法时以非零退出码中止,
-不会在"规则没生效"的情况下静默继续脱敏。完整字段说明与 agent 生成规则的工作流见
+不会在"规则没生效"的情况下静默继续脱敏。
+
+`priority` (0-99, 默认 99) 只决定等长重叠的归属——想让自定义类型在同一个 span 上
+胜过某个内置类型, 给它一个更小的数字。规则文件支持热更新: 引擎按文件签名
+(mtime + size) 检查, 默认每秒最多一次, 文件变化后自动替换识别器; 热更新失败
+(文件被删、JSON 损坏、规则全部非法) 时保留上一份可用规则。设 `PII_DSH_RULES_RELOAD=0`
+可关闭自动检查, 改用 `reload_rules()` / `engine.reload_custom_rules()` 显式重载。
+
+完整字段说明与 agent 生成规则的工作流见
 [`.agent-presets/presidio-pii/README.md`](.agent-presets/presidio-pii/README.md#自定义识别规则)。
 
 ## 测试
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/ -v                          # 105 个回归用例
+pytest tests/ -v                          # 123 个回归用例
 
 # 无 DSH 检测真实文档 (泄漏检查 + 还原无损 + 占位符清零, JSON 报告)
 python tools/standalone_check.py 报告.docx 名单.xlsx

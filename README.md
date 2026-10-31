@@ -58,10 +58,10 @@ is unaffected.
 Business identifiers outside the built-in entity set (employee IDs, member numbers,
 order numbers) can be added without touching engine code. Two template kinds, mixed freely:
 
-- **JSON regex templates** — `pattern`, `entity_type`, optional `score`, `context_hint`,
-  `negative_hint`, `validator`.
+- **JSON regex templates** — `pattern`, `entity_type`, optional `score`, `priority`,
+  `context_hint`, `negative_hint`, `validator`.
 - **Python code rules** — a `.py` file exposing `analyze(text) -> [(start, end[, score])]`
-  plus optional `ENTITY_TYPE` / `SCORE`.
+  plus optional `ENTITY_TYPE` / `SCORE` / `PRIORITY`.
 
 ```bash
 export PII_DSH_CUSTOM_RULES=/path/rules.json;/path/order_rule.py
@@ -71,15 +71,24 @@ python -m presidio_pii.cli redact doc.docx --rules rules.json
 Custom rules match the original text, take part in whitelist exemption, overlap
 arbitration and placeholder restoration exactly like built-in recognizers. Rules passed
 explicitly via `--rules` are loaded strictly: a missing file or an invalid rule exits
-non-zero instead of silently redacting without them. See
-[`.agent-presets/presidio-pii/README.md`](.agent-presets/presidio-pii/README.md#自定义识别规则)
+non-zero instead of silently redacting without them.
+
+`priority` (0-99, default 99) only decides equal-length overlaps — give a custom type a
+smaller number than a built-in one to win the same span. Rule files are hot-reloaded: the
+engine compares file signatures (mtime + size) at most once per second and swaps the
+recognizers when a file changes; if a reload fails (file deleted, broken JSON, all rules
+invalid) the previous rules stay in effect. Set `PII_DSH_RULES_RELOAD=0` to disable
+automatic checks and call `reload_rules()` / `engine.reload_custom_rules()` for an
+explicit reload.
+
+See [`.agent-presets/presidio-pii/README.md`](.agent-presets/presidio-pii/README.md#自定义识别规则)
 for the full field reference and agent workflow.
 
 ## Testing
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/ -v                          # 105 regression cases
+pytest tests/ -v                          # 123 regression cases
 
 # Check real documents without DSH (leak check + lossless restore + zero placeholders, JSON report)
 python tools/standalone_check.py report.docx roster.xlsx

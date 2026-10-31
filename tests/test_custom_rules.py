@@ -3,14 +3,15 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from presidio_pii.chinese_recognizers import BankCardRecognizer
-from presidio_pii.custom_rules import (RulesLoadError, load_custom_rules,
-                                       load_json_rules)
+from presidio_pii.custom_rules import (CustomRuleSet, RulesLoadError,
+                                       load_custom_rules, load_json_rules)
 from presidio_pii.engine import PresidioPIIEngine
 
 
@@ -288,6 +289,326 @@ class IntegrationTest(unittest.TestCase):
                         os.environ.pop(k, None)
                     else:
                         os.environ[k] = v
+
+    def test_hooks_reload_rules(self):
+        """改完规则文件后 hooks.reload_rules() 立即生效; 间隔 0 时不会自动重载。"""
+        from presidio_pii import hooks
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            rules = td / "rules.json"
+            rules.write_text(json.dumps(
+                [{"name": "a", "entity_type": "TYPE_A", "pattern": r"ID-\d{3}"}],
+                ensure_ascii=False), encoding="utf-8")
+            preset = td / "preset.json"
+            preset.write_text(json.dumps({
+                "name": "presidio-pii",
+                "config": {"custom_rules_path": "rules.json",
+                           "rules_reload_interval": 0},
+            }, ensure_ascii=False), encoding="utf-8")
+            env = {"PII_DSH_PRESET": str(preset), "PII_DSH_DB_PATH": ":memory:",
+                   "PII_DSH_LOG_PATH": "0"}
+            old = {k: os.environ.get(k) for k in env}
+            os.environ.update(env)
+            hooks.reset_singleton()
+            try:
+                self.assertIn("TYPE_A", hooks.before_llm("编号 ID-123", "conv-reload"))
+
+                rules.write_text(json.dumps(
+                    [{"name": "b", "entity_type": "TYPE_B", "pattern": r"ID-\d{4}"}],
+                    ensure_ascii=False), encoding="utf-8")
+                st = rules.stat()
+                os.utime(rules, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+                # 自动检查已关闭: 未显式重载前仍用旧规则
+                self.assertIn("TYPE_A", hooks.before_llm("编号 ID-1234", "conv-reload"))
+                self.assertEqual(hooks.reload_rules(), 1)
+                self.assertIn("TYPE_B", hooks.before_llm("编号 ID-1234", "conv-reload"))
+            finally:
+                hooks.reset_singleton()
+                for k, v in old.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+
+
+class PriorityTest(unittest.TestCase):
+    """自定义 entity_type 的优先级调参 (仅在等长重叠时参与裁决)。"""
+
+    EMAIL_PATTERN = r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"
+
+    def _write(self, tmp, data):
+        p = Path(tmp) / "rules.json"
+        p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        return p
+
+    def test_priority_beats_builtin_on_equal_span(self):
+        # 内置 EMAIL_ADDRESS 优先级 4; 自定义 CONTACT 用 3 抢走同一 span
+        with tempfile.TemporaryDirectory() as td:
+            p = self._write(td, [{
+                "name": "contact", "entity_type": "CONTACT",
+                "pattern": self.EMAIL_PATTERN, "priority": 3,
+            }])
+            e = _engine(load_json_rules(p))
+            rs = e.analyze("邮箱 a.b@bank.com 已登记")
+            self.assertEqual([r.entity_type for r in rs], ["CONTACT"])
+
+    def test_default_priority_loses_to_builtin(self):
+        # 未声明 priority 时为 99, 等长冲突输给内置类型
+        with tempfile.TemporaryDirectory() as td:
+            p = self._write(td, [{
+                "name": "contact", "entity_type": "CONTACT",
+                "pattern": self.EMAIL_PATTERN,
+            }])
+            e = _engine(load_json_rules(p))
+            rs = e.analyze("邮箱 a.b@bank.com 已登记")
+            self.assertEqual([r.entity_type for r in rs], ["EMAIL_ADDRESS"])
+
+    def test_lower_number_wins_between_custom_rules(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = self._write(td, [
+                {"name": "a", "entity_type": "AAA", "pattern": r"REF-\d{4}",
+                 "priority": 50},
+                {"name": "b", "entity_type": "BBB", "pattern": r"REF-\d{4}",
+                 "priority": 10},
+            ])
+            e = _engine(load_json_rules(p))
+            rs = e.analyze("单号 REF-1234 已受理")
+            self.assertEqual([r.entity_type for r in rs], ["BBB"])
+
+    def test_priority_out_of_range_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = self._write(td, [{
+                "name": "bad", "entity_type": "X", "pattern": r"\d{4}",
+                "priority": 150,
+            }])
+            self.assertEqual(load_json_rules(p), [])
+            with self.assertRaises(RulesLoadError):
+                load_json_rules(p, strict=True)
+
+    def test_non_integer_priority_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = self._write(td, [{
+                "name": "bad", "entity_type": "X", "pattern": r"\d{4}",
+                "priority": "high",
+            }])
+            self.assertEqual(load_json_rules(p), [])
+            with self.assertRaises(RulesLoadError):
+                load_json_rules(p, strict=True)
+
+    def test_code_rule_priority(self):
+        code = (
+            "ENTITY_TYPE = 'CONTACT'\n"
+            "PRIORITY = 3\n"
+            "def analyze(text):\n"
+            "    import re\n"
+            f"    return [(m.start(), m.end()) for m in re.finditer(r'{self.EMAIL_PATTERN}', text)]\n"
+        )
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "contact_rule.py"
+            p.write_text(code, encoding="utf-8")
+            e = _engine(load_custom_rules(str(p)))
+            rs = e.analyze("邮箱 a.b@bank.com 已登记")
+            self.assertEqual([r.entity_type for r in rs], ["CONTACT"])
+
+    def test_code_rule_invalid_priority_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "bad_priority.py"
+            p.write_text(
+                "ENTITY_TYPE = 'X'\nPRIORITY = 'high'\n"
+                "def analyze(text):\n    return []\n", encoding="utf-8")
+            self.assertEqual(load_custom_rules(str(p)), [])
+            with self.assertRaises(RulesLoadError):
+                load_custom_rules(str(p), strict=True)
+
+
+class HotReloadTest(unittest.TestCase):
+    """规则文件热更新: 自动检查、显式重载、失败保留旧规则。"""
+
+    @staticmethod
+    def _write(path: Path, rules) -> None:
+        path.write_text(json.dumps(rules, ensure_ascii=False), encoding="utf-8")
+
+    @staticmethod
+    def _touch(path: Path) -> None:
+        """推进 mtime, 避免同一时钟刻度内写入导致签名不变。"""
+        st = path.stat()
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+
+    @staticmethod
+    def _rule(pattern, entity_type="TYPE_A", name="r"):
+        return {"name": name, "entity_type": entity_type, "pattern": pattern}
+
+    def test_auto_reload_on_file_change(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "rules.json"
+            self._write(p, [self._rule(r"ID-\d{3}")])
+            e = PresidioPIIEngine(db_path=":memory:", custom_rules=str(p),
+                                  rules_check_interval=0.001)
+            self.assertEqual(e.analyze("ID-123")[0].entity_type, "TYPE_A")
+            self.assertEqual(e.analyze("TK-1234"), [])
+
+            self._write(p, [self._rule(r"TK-\d{4}", "TYPE_B", "r2")])
+            self._touch(p)
+            time.sleep(0.02)  # 越过检查间隔
+            rs = e.analyze("TK-1234")
+            self.assertEqual([r.entity_type for r in rs], ["TYPE_B"])
+
+    def test_explicit_reload_when_auto_disabled(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "rules.json"
+            self._write(p, [self._rule(r"ID-\d{3}")])
+            e = PresidioPIIEngine(db_path=":memory:", custom_rules=str(p),
+                                  rules_check_interval=0)
+            self.assertEqual(e.analyze("ID-123")[0].entity_type, "TYPE_A")
+
+            self._write(p, [self._rule(r"TK-\d{4}", "TYPE_B", "r2")])
+            self._touch(p)
+            self.assertEqual(e.analyze("TK-1234"), [])  # 自动检查已关闭
+            self.assertEqual(e.reload_custom_rules(), 1)
+            self.assertEqual(e.analyze("TK-1234")[0].entity_type, "TYPE_B")
+
+    def test_broken_file_keeps_previous_rules(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "rules.json"
+            self._write(p, [self._rule(r"ID-\d{3}")])
+            e = PresidioPIIEngine(db_path=":memory:", custom_rules=str(p),
+                                  rules_check_interval=0)
+            p.write_text("{ not json", encoding="utf-8")
+            self._touch(p)
+            self.assertEqual(e.reload_custom_rules(), 1)  # 旧规则仍在
+            self.assertEqual(e.analyze("ID-123")[0].entity_type, "TYPE_A")
+
+    def test_deleted_file_keeps_previous_rules(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "rules.json"
+            self._write(p, [self._rule(r"ID-\d{3}")])
+            e = PresidioPIIEngine(db_path=":memory:", custom_rules=str(p),
+                                  rules_check_interval=0)
+            p.unlink()
+            self.assertEqual(e.reload_custom_rules(), 1)
+            self.assertEqual(e.analyze("ID-123")[0].entity_type, "TYPE_A")
+
+    def test_code_rule_reload(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "order_rule.py"
+            p.write_text(
+                "ENTITY_TYPE = 'ORDER_NO'\n"
+                "def analyze(text):\n"
+                "    import re\n"
+                "    return [(m.start(), m.end()) for m in re.finditer(r'ORD-\\d{4}', text)]\n",
+                encoding="utf-8")
+            e = PresidioPIIEngine(db_path=":memory:", custom_rules=str(p),
+                                  rules_check_interval=0)
+            self.assertEqual(e.analyze("ORD-1234")[0].entity_type, "ORDER_NO")
+            self.assertEqual(e.analyze("TK-12345"), [])
+
+            p.write_text(
+                "ENTITY_TYPE = 'TICKET_NO'\n"
+                "def analyze(text):\n"
+                "    import re\n"
+                "    return [(m.start(), m.end()) for m in re.finditer(r'ORD-\\d{5}', text)]\n",
+                encoding="utf-8")
+            self._touch(p)
+            self.assertEqual(e.reload_custom_rules(), 1)
+            self.assertEqual(e.analyze("ORD-12345")[0].entity_type, "TICKET_NO")
+
+    def test_static_rule_list_is_not_reloaded(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "rules.json"
+            self._write(p, [self._rule(r"ID-\d{3}")])
+            rules = load_json_rules(p)
+            e = _engine(rules)
+            self._write(p, [self._rule(r"TK-\d{4}", "TYPE_B", "r2")])
+            self.assertEqual(e.reload_custom_rules(), 1)  # 静态集合条数不变
+            self.assertEqual(e.analyze("TK-1234"), [])
+
+    def test_env_sources_are_monitored(self):
+        """custom_rules=None 时从环境变量取来源, 同样能热更新。"""
+        from presidio_pii import custom_rules as cr
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "rules.json"
+            self._write(p, [self._rule(r"ID-\d{3}")])
+            old = os.environ.get(cr._CUSTOM_ENV)
+            os.environ[cr._CUSTOM_ENV] = str(p)
+            try:
+                e = PresidioPIIEngine(db_path=":memory:", rules_check_interval=0)
+                self.assertEqual(e.analyze("ID-123")[0].entity_type, "TYPE_A")
+                self._write(p, [self._rule(r"TK-\d{4}", "TYPE_B", "r2")])
+                self._touch(p)
+                self.assertEqual(e.reload_custom_rules(), 1)
+                self.assertEqual(e.analyze("TK-1234")[0].entity_type, "TYPE_B")
+            finally:
+                if old is None:
+                    os.environ.pop(cr._CUSTOM_ENV, None)
+                else:
+                    os.environ[cr._CUSTOM_ENV] = old
+
+    def test_ruleset_refresh_force(self):
+        """CustomRuleSet 本身也可独立使用 (无引擎)。"""
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "rules.json"
+            self._write(p, [self._rule(r"ID-\d{3}")])
+            rs = CustomRuleSet(str(p), check_interval=0)
+            self.assertEqual(len(rs), 1)
+            self.assertFalse(rs.refresh())          # 文件未变
+            self._write(p, [self._rule(r"ID-\d{4}", "TYPE_B", "r2")])
+            self._touch(p)
+            self.assertTrue(rs.refresh(force=True))
+            self.assertEqual(rs.rules[0].entity_type, "TYPE_B")
+
+
+class DocumentHandlerTest(unittest.TestCase):
+    """自定义规则在 xlsx / pptx handler 上的端到端往返。"""
+
+    RULES = [{
+        "name": "employee_id",
+        "entity_type": "EMPLOYEE_ID",
+        "pattern": r"工号[:：\s]*([A-Z]\d{6})",
+    }]
+
+    def _prepare(self, td: Path):
+        (td / "rules.json").write_text(
+            json.dumps(self.RULES, ensure_ascii=False), encoding="utf-8")
+        return td / "rules.json"
+
+    def test_custom_rule_xlsx_roundtrip(self):
+        import openpyxl
+        from presidio_pii import cli
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            rules = self._prepare(td)
+            wb = openpyxl.Workbook()
+            wb.active["A1"] = "员工工号：A123456，请核实"
+            wb.save(td / "t.xlsx")
+            self.assertEqual(cli.main(["redact", str(td / "t.xlsx"), "--rules",
+                                       str(rules), "-d", str(td / "out")]), 0)
+            redacted = openpyxl.load_workbook(td / "out" / "t.xlsx").active["A1"].value
+            self.assertIn("⟦PII:EMPLOYEE_ID:0001⟧", redacted)
+            self.assertEqual(cli.main(["restore", str(td / "out" / "t.xlsx"),
+                                       "-d", str(td / "restored")]), 0)
+            restored = openpyxl.load_workbook(
+                td / "restored" / "t.xlsx").active["A1"].value
+            self.assertEqual(restored, "员工工号：A123456，请核实")
+
+    def test_custom_rule_pptx_roundtrip(self):
+        from pptx import Presentation
+        from presidio_pii import cli
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            rules = self._prepare(td)
+            prs = Presentation()
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            box = slide.shapes.add_textbox(0, 0, 4000000, 1000000)
+            box.text_frame.text = "员工工号：A123456，请核实"
+            prs.save(td / "t.pptx")
+            self.assertEqual(cli.main(["redact", str(td / "t.pptx"), "--rules",
+                                       str(rules), "-d", str(td / "out")]), 0)
+            redacted = Presentation(td / "out" / "t.pptx").slides[0].shapes[0]
+            self.assertIn("⟦PII:EMPLOYEE_ID:0001⟧", redacted.text_frame.text)
+            self.assertEqual(cli.main(["restore", str(td / "out" / "t.pptx"),
+                                       "-d", str(td / "restored")]), 0)
+            restored = Presentation(td / "restored" / "t.pptx").slides[0].shapes[0]
+            self.assertEqual(restored.text_frame.text, "员工工号：A123456，请核实")
 
 
 if __name__ == "__main__":

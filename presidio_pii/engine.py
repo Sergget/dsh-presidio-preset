@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List
 
 from .chinese_recognizers import RecognizerResult, get_chinese_recognizers
-from .custom_rules import load_custom_rules
+from .custom_rules import CustomRuleSet
 from .db import SessionRegistry
 from .normalize import NormalizedText
 
@@ -56,14 +56,50 @@ class PresidioPIIEngine:
     whitelist: 受保护的关键词列表。命中白名单的区域不会被脱敏,
     与白名单区域重叠的实体一并跳过 (例如白名单含 "合肥市数据资源局" 时,
     其中的 "合肥市" 也不会被单独脱敏)。
+
+    custom_rules 支持四种形态:
+      - None: 从 PII_DSH_CUSTOM_RULES 环境变量加载 (可热更新)
+      - str: 规则文件路径 (分号/逗号分隔, 可热更新)
+      - CustomRuleSet: 直接使用调用方管理的规则集合
+      - list: 已加载的静态规则列表 (不监控文件变更)
+    rules_check_interval: 热更新检查间隔 (秒), <=0 关闭自动检查。
     """
 
-    def __init__(self, db_path=None, whitelist=None, custom_rules=None):
-        self.recognizers = get_chinese_recognizers()
-        self.custom_rules = custom_rules if custom_rules is not None else load_custom_rules()
-        self.recognizers.extend(self.custom_rules)
+    def __init__(self, db_path=None, whitelist=None, custom_rules=None,
+                 rules_check_interval: float = 1.0):
+        self._builtin_recognizers = get_chinese_recognizers()
+        if isinstance(custom_rules, CustomRuleSet):
+            self._rule_set = custom_rules
+        elif isinstance(custom_rules, str):
+            self._rule_set = CustomRuleSet(custom_rules,
+                                           check_interval=rules_check_interval)
+        elif custom_rules is not None:
+            self._rule_set = CustomRuleSet.from_rules(custom_rules)
+        else:
+            self._rule_set = CustomRuleSet(check_interval=rules_check_interval)
         self.registry = SessionRegistry(db_path) if db_path else SessionRegistry()
         self.whitelist = [w for w in (whitelist or []) if w]
+        self._sync_recognizers()
+
+    @property
+    def custom_rules(self) -> List:
+        """当前生效的自定义规则 (热更新后会变化)。"""
+        return self._rule_set.rules
+
+    def _sync_recognizers(self) -> None:
+        """重建识别器列表与优先级表 (规则热更新后调用)。"""
+        self.recognizers = self._builtin_recognizers + list(self._rule_set.rules)
+        # 自定义类型可覆盖同名内置类型的优先级; 未声明的类型仍按 99 兜底
+        self._prio = {**_PRIO, **self._rule_set.entity_priorities()}
+
+    def reload_custom_rules(self, force: bool = True) -> int:
+        """显式重载自定义规则, 返回当前规则条数。
+
+        force=False 时仍受 rules_check_interval 节流。静态规则列表不受影响。
+        """
+        if self._rule_set.refresh(force=force):
+            self._sync_recognizers()
+        return len(self._rule_set)
 
     def set_whitelist(self, terms) -> None:
         self.whitelist = [w for w in (terms or []) if w]
@@ -98,6 +134,8 @@ class PresidioPIIEngine:
         """
         if not text:
             return []
+        if self._rule_set.refresh():
+            self._sync_recognizers()  # 规则文件变了: 重建识别器与优先级表
         norm = NormalizedText(text)
         probe = norm.text if norm.changed else text
         results: List[RecognizerResult] = []
@@ -113,17 +151,19 @@ class PresidioPIIEngine:
                     continue
                 mapped.append(RecognizerResult(start, end, r.entity_type, r.score))
             results = mapped
-        # 去重 & 冲突处理
-        return self._resolve_overlaps(results)
+        # 去重 & 冲突处理 (使用含自定义优先级的表)
+        return self._resolve_overlaps(results, self._prio)
 
     @staticmethod
-    def _resolve_overlaps(results: List[RecognizerResult]) -> List[RecognizerResult]:
+    def _resolve_overlaps(results: List[RecognizerResult],
+                          prio: Dict[str, int] | None = None) -> List[RecognizerResult]:
         if not results:
             return []
+        priority = _PRIO if prio is None else prio
         # 长实体优先: "安徽省数据资源管理局" 应整体保留, 不被其中的 "安徽省" 切碎;
         # 等长时按优先级, 再按起点, 保证结果稳定
         results.sort(key=lambda r: (-(r.end - r.start),
-                                    _PRIO.get(r.entity_type, 99), r.start))
+                                    priority.get(r.entity_type, 99), r.start))
         merged: List[RecognizerResult] = []
         for r in results:
             if not any(r.start < m.end and r.end > m.start for m in merged):

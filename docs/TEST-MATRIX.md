@@ -120,9 +120,9 @@
 | 四层接入开关 | ✅ 已实现 | `test_cli_rules_end_to_end`、`test_env_var_loading`、`test_hooks_read_preset_custom_rules` | CLI / env / preset / API，优先级 env > preset > 默认 |
 | 严格加载 | ✅ 已实现 | `test_invalid_rule_raises_strict`、`test_cli_missing_rules_fails_loudly` | 显式规则失败 → 非零退出 |
 | 白名单联动 | ✅ 已实现 | `test_whitelist_exempts_custom_entity` | |
-| 自定义规则 × 文档 handler | ✅ 已实现 | `test_custom_rule_docx_roundtrip` | docx 脱敏 + 还原无损已验证；xlsx/pptx 未单独覆盖 |
-| 规则热更新 / 重载 | ⬜ 未实现 | — | 引擎初始化时加载一次，改规则需重启进程 |
-| 规则优先级调参 | ⬜ 未暴露 | — | 自定义 `entity_type` 不在 `_PRIO` 表中，等长冲突时按最低优先级（99）仲裁 |
+| 自定义规则 × 文档 handler | ✅ 已实现 | `test_custom_rule_docx_roundtrip`、`test_custom_rule_xlsx_roundtrip`、`test_custom_rule_pptx_roundtrip` | docx/xlsx/pptx 脱敏 + 还原无损均已覆盖 |
+| 规则热更新 / 重载 | ✅ 已实现 | `test_auto_reload_on_file_change`、`test_explicit_reload_when_auto_disabled`、`test_broken_file_keeps_previous_rules`、`test_code_rule_reload`、`test_hooks_reload_rules` | 文件签名（mtime + size）检查，默认 1s；失败保留旧规则 |
+| 规则优先级调参 | ✅ 已实现 | `test_priority_beats_builtin_on_equal_span`、`test_lower_number_wins_between_custom_rules`、`test_code_rule_priority` | JSON `priority` / 代码 `PRIORITY`，0-99，仅等长重叠生效 |
 
 ## 4. 建议路线（按投入产出）
 
@@ -242,3 +242,36 @@
    代码规则 import 即执行，需与配置同等保护。
 3. 规则层的新风险是**静默失效**（文件缺失、规则全非法），因此显式来源必须严格加载。
 4. 人工真值仍是下一阶段门槛；合成语料无法证明真实分布下的可用性。
+
+## 8. 自定义规则收尾（2026-10-31）
+
+### 产出
+
+| 文件 | 内容 |
+|---|---|
+| `presidio_pii/custom_rules.py` | `RuleSpec.priority`、JSON `priority` / 代码 `PRIORITY` 解析与校验；`CustomRuleSet` 规则集合与热更新 |
+| `presidio_pii/engine.py` | `custom_rules` 支持 None / 路径 / `CustomRuleSet` / 列表；`_prio` 合并自定义优先级；`reload_custom_rules()` |
+| `presidio_pii/hooks.py` | 规则来源改为传路径以启用热更新；`PII_DSH_RULES_RELOAD` / preset `rules_reload_interval`；`reload_rules()` |
+| `tests/test_custom_rules.py` | 18 条新用例：优先级仲裁、JSON/代码规则重载、失败保留旧规则、hooks 显式重载、xlsx/pptx 端到端 |
+
+### 测试
+
+123 passed（上一轮 105 → 新增 18 条）。
+
+### 本轮行为约定
+
+1. **优先级只裁决等长重叠**：长度优先规则不变；自定义类型默认 99，可覆盖同名内置类型。
+2. **热更新按签名触发**：mtime + size，默认每秒最多检查一次；`PII_DSH_RULES_RELOAD=0` 关闭。
+3. **失败保留旧规则**：文件被删、JSON 损坏或规则全部非法时继续使用上一份规则并写 stderr，
+   不允许运行中静默退化为「不脱敏」。
+4. **静态列表不监控**：CLI `--rules` / API 传入已加载列表时行为不变，仍是一次性严格加载。
+
+### 已知问题（非本轮引入）
+
+未安装 jieba 的回退模式下有两处既有误判/漏判，本轮未改动识别器：
+
+- `由张三负责…` 中的 `张三` 未命中——`三` 在 `_NON_NAME_CHARS` 里，回退模式被用字过滤拒绝；
+- `任意文本` 中的 `任意` 被误判为 `PERSON`——回退模式没有词典常用词过滤。
+
+两处都只在无 jieba 时出现；装上 jieba 后分别由 `nr` 词性与 `is_common_word` 兜住。
+修复需要调整回退模式的用字表/停止词，须同时重跑双模式与语料回归，留待后续单独处理。

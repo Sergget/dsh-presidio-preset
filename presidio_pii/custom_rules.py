@@ -12,6 +12,7 @@ Engine(custom_rules=...) 注入, preset.json 的 config.custom_rules_path 同源
     "entity_type": "EMPLOYEE_ID",       // 产出实体类型 (占位符 ⟦PII:EMPLOYEE_ID:0001⟧)
     "pattern": "工号[:：\\s]*([A-Z]\\d{6})",  // 正则; 若含捕获组则取组1
     "score": 0.9,                        // 可选, 默认 0.8
+    "priority": 3,                       // 可选, 0-99, 默认 99; 仅等长重叠时比大小
     "context_hint": ["工号", "编号"],    // 可选: 匹配前方 20 字符内需含任一提示词才生效
     "negative_hint": ["示例", "如"]      // 可选: 前方 20 字符内含任一词则跳过
   },
@@ -24,14 +25,23 @@ Engine(custom_rules=...) 注入, preset.json 的 config.custom_rules_path 同源
 ]
 
 代码规则: 单独的 .py 文件, 定义 analyze(text) -> list[tuple[int,int]] (或
-list[(start, end, score)]), 及可选 ENTITY_TYPE 常量:
+list[(start, end, score)]), 及可选 ENTITY_TYPE / PRIORITY 常量:
 
     ENTITY_TYPE = "ORDER_NO"
+    PRIORITY = 3
     def analyze(text):
         ...
 
 代码规则在受控目录下加载: 只信任 PII_DSH_CUSTOM_RULES 明确指向的文件,
 import 即执行其中代码 —— 规则文件应与配置一样受访问控制保护。
+
+优先级: 内置实体已有优先级表 (见 engine._PRIO); 自定义规则默认 99 (最低)。
+冲突裁决先比长度, 长度相同时才比优先级 —— 想让自定义实体在等长重叠中
+胜过某个内置类型, 就把 priority 调到比它更小。
+
+热更新: CustomRuleSet 按文件签名 (mtime + size) 检测变更, 默认每 1 秒最多
+检查一次。热更新失败 (文件被删/内容全非法) 时保留上一份可用规则, 避免运行中
+脱敏悄悄失效。
 
 坐标注意: 正则在原文上匹配 (不经过归一化), 代码规则返回的坐标也应是原文坐标。
 """
@@ -42,15 +52,19 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from .chinese_recognizers import LightRecognizer, RecognizerResult
 
 _CUSTOM_ENV = "PII_DSH_CUSTOM_RULES"
 
 _CONTEXT_WINDOW = 20  # context_hint / negative_hint 向前看的字符数
+
+_DEFAULT_PRIORITY = 99  # 与 engine._PRIO 的兜底值一致: 低于全部内置类型
 
 
 class RulesLoadError(Exception):
@@ -61,6 +75,20 @@ def _warn(msg: str) -> None:
     print(f"[custom_rules] {msg}", file=sys.stderr)
 
 
+def _parse_priority(value) -> int:
+    """校验规则优先级: 0-99 的整数, 缺省 99。
+
+    bool 是 int 的子类, 必须单独排除 ("priority": true 不是合法优先级)。
+    """
+    if value is None:
+        return _DEFAULT_PRIORITY
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"priority 需为 0-99 的整数: {value!r}")
+    if not 0 <= value <= 99:
+        raise ValueError(f"priority 超出 0-99: {value}")
+    return value
+
+
 @dataclass(frozen=True)
 class RuleSpec:
     """一条自定义规则的声明。"""
@@ -69,6 +97,7 @@ class RuleSpec:
     score: float = 0.80
     context_hint: Tuple[str, ...] = ()
     negative_hint: Tuple[str, ...] = ()
+    priority: int = _DEFAULT_PRIORITY
 
 
 class RegexRuleRecognizer(LightRecognizer):
@@ -84,6 +113,7 @@ class RegexRuleRecognizer(LightRecognizer):
                          validator=validator)
         self.name = spec.name
         self.spec = spec
+        self.priority = spec.priority
         self.wants_raw = True  # 自定义规则按文档约定在原文上匹配 (坐标即原文坐标)
 
     def analyze(self, text: str) -> List[RecognizerResult]:
@@ -121,6 +151,7 @@ class CodeRuleRecognizer:
         self.name = getattr(module, "RULE_NAME", module.__name__)
         self.entity_type = getattr(module, "ENTITY_TYPE", "CUSTOM")
         self.score = float(getattr(module, "SCORE", 0.80))
+        self.priority = _parse_priority(getattr(module, "PRIORITY", None))
         self.wants_raw = True  # 同正则模板: 原文匹配, 原文坐标
         self._warned = False
 
@@ -170,6 +201,7 @@ def load_json_rules(path: Path, strict: bool = False) -> List:
                 score=float(item.get("score", 0.80)),
                 context_hint=tuple(item.get("context_hint", ())),
                 negative_hint=tuple(item.get("negative_hint", ())),
+                priority=_parse_priority(item.get("priority")),
             )
             validator = _resolve_validator(item.get("validator"), path.parent)
             rules.append(RegexRuleRecognizer(spec, item["pattern"], validator))
@@ -237,7 +269,15 @@ def load_code_rules(path: Path, strict: bool = False) -> List[CodeRuleRecognizer
             raise RulesLoadError(msg)
         _warn(msg)
         return []
-    return [CodeRuleRecognizer(mod)]
+    try:
+        return [CodeRuleRecognizer(mod)]
+    except (TypeError, ValueError) as exc:
+        # ENTITY_TYPE / SCORE / PRIORITY 声明非法: 与 JSON 规则同口径处理
+        msg = f"代码规则 {path} 声明非法: {exc}"
+        if strict:
+            raise RulesLoadError(msg) from exc
+        _warn(msg)
+        return []
 
 
 def load_custom_rules(value: Optional[str] = None, strict: bool = False) -> List:
@@ -279,3 +319,109 @@ def load_custom_rules(value: Optional[str] = None, strict: bool = False) -> List
     if strict and errors:
         raise RulesLoadError("; ".join(errors))
     return rules
+
+
+class CustomRuleSet:
+    """自定义规则集合, 支持规则文件热更新。
+
+    sources 与 PII_DSH_CUSTOM_RULES 同格式 (分号/逗号分隔多个文件)。
+    引擎在每次 analyze 前调用 refresh(): 距上次检查超过 check_interval 秒时,
+    比对文件签名 (mtime + size), 有变化才重新加载。check_interval <= 0 关闭
+    自动检查, 只能靠 reload_custom_rules(force=True) 显式触发。
+
+    热更新加载失败 (文件被删、JSON 损坏、规则全部非法) 时保留上一份可用规则
+    并写 stderr —— 隐私工具在运行中悄悄变成"不脱敏"比报错危险得多。
+
+    rules 参数用于静态集合 (调用方已自行加载): 此时 sources/热更新均不生效。
+    """
+
+    def __init__(self, sources: Optional[str] = None, strict: bool = False,
+                 check_interval: float = 1.0, rules: Optional[List] = None):
+        self._static = rules is not None
+        # 静态集合不读环境变量; 非静态时把环境变量落成 sources, 否则无法监控文件
+        if sources is None and not self._static:
+            sources = os.environ.get(_CUSTOM_ENV)
+        self.sources = sources
+        self.strict = strict
+        self.check_interval = max(0.0, float(check_interval))
+        self._lock = threading.Lock()
+        self._last_check = 0.0
+        self._signature: Tuple = ()
+        if self._static:
+            self.rules: List = list(rules)
+        else:
+            self._signature = self._source_signature()
+            self.rules = load_custom_rules(self.sources, strict=strict)
+
+    # ---- 构造 ----
+    @classmethod
+    def from_rules(cls, rules: List) -> "CustomRuleSet":
+        """包装一份已加载的规则列表 (不做文件监控)。"""
+        return cls(rules=rules)
+
+    def _source_paths(self) -> List[Path]:
+        if not self.sources:
+            return []
+        return [Path(p.strip()) for p in re.split(r"[;,]", self.sources) if p.strip()]
+
+    def _source_signature(self) -> Tuple:
+        """规则文件的 (路径, mtime_ns, size) 快照; 缺失文件也记录, 便于感知恢复。"""
+        sig = []
+        for p in self._source_paths():
+            try:
+                st = p.stat()
+                sig.append((str(p), st.st_mtime_ns, st.st_size))
+            except OSError:
+                sig.append((str(p), None, None))
+        return tuple(sig)
+
+    # ---- 热更新 ----
+    def refresh(self, force: bool = False) -> bool:
+        """检查并（必要时）重新加载规则。返回是否真的换过规则。
+
+        force=True 跳过时间节流, 用于显式 reload; 文件未变时仍不重复加载。
+        """
+        if self._static or not self.sources:
+            return False
+        with self._lock:
+            now = time.monotonic()
+            if not force:
+                if self.check_interval <= 0:
+                    return False
+                if now - self._last_check < self.check_interval:
+                    return False
+            self._last_check = now
+            sig = self._source_signature()
+            if sig == self._signature:
+                return False
+            try:
+                rules = load_custom_rules(self.sources)
+            except RulesLoadError as exc:  # 宽松模式理论上不抛, 兜底防中断
+                _warn(f"规则热更新失败, 继续使用上一份规则: {exc}")
+                self._signature = sig
+                return False
+            if not rules and self.rules:
+                _warn("规则热更新未产出任何规则 (文件缺失或全部非法), 继续使用上一份规则")
+                self._signature = sig
+                return False
+            self.rules = rules
+            self._signature = sig
+            return True
+
+    def entity_priorities(self) -> Dict[str, int]:
+        """自定义实体类型的优先级表 (同一类型出现多次时取最高优先级)。"""
+        prio: Dict[str, int] = {}
+        for rule in self.rules:
+            p = getattr(rule, "priority", None)
+            entity_type = getattr(rule, "entity_type", None)
+            if p is None or not entity_type:
+                continue
+            if entity_type not in prio or p < prio[entity_type]:
+                prio[entity_type] = p
+        return prio
+
+    def __iter__(self):
+        return iter(self.rules)
+
+    def __len__(self) -> int:
+        return len(self.rules)
