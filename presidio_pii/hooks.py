@@ -10,12 +10,20 @@
   PII_DSH_DB_PATH    覆盖映射库路径
   PII_DSH_LOG_PATH   覆盖日志路径 (设为 "0" 关闭日志)
   PII_DSH_WHITELIST  白名单文件路径 (每行一个关键词, 命中的区域不脱敏)
+  PII_DSH_CUSTOM_RULES  自定义规则文件 (分号分隔多个, .json=正则模板, .py=代码规则)
+  PII_DSH_PRESET     覆盖 preset.json 路径
+
+配置优先级: 环境变量 > preset.json 的 config 段 > 内置默认值。
+preset.json 支持 db_path / whitelist_path / custom_rules_path 三个字段,
+相对路径按仓库根目录解析。
 """
 from __future__ import annotations
 
 import datetime as _dt
 import hashlib
+import json
 import os
+import sys
 from pathlib import Path
 from typing import Tuple
 
@@ -25,18 +33,67 @@ from .journal import JsonlJournal
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_DB = _REPO_ROOT / ".pii_presidio_store" / "sessions.db"
 _DEFAULT_LOG = _REPO_ROOT / ".pii_presidio_store" / "hook_log.jsonl"
+_DEFAULT_PRESET = _REPO_ROOT / ".agent-presets" / "presidio-pii" / "preset.json"
 
 _ENGINE: PresidioPIIEngine | None = None
 _JOURNAL: JsonlJournal | None = None
 
 
+def _preset_file() -> Path:
+    return Path(os.environ.get("PII_DSH_PRESET", str(_DEFAULT_PRESET)))
+
+
+def _preset_config() -> dict:
+    """读取 DSH preset.json 的 config 段 (路径可用 PII_DSH_PRESET 覆盖)。
+
+    环境变量优先级高于 preset 配置; preset 文件缺失或损坏时返回空字典,
+    不影响环境变量与默认值生效。
+    """
+    fp = _preset_file()
+    if not fp.exists():
+        return {}
+    try:
+        data = json.loads(fp.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        print(f"[pii] preset 配置读取失败 ({fp}): {exc}", file=sys.stderr)
+        return {}
+    cfg = data.get("config")
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _preset_path(key: str) -> str | None:
+    """取 preset 配置中的路径字段。
+
+    相对路径优先按仓库根目录解析 (与默认 db_path 一致), 不存在时再按
+    preset.json 所在目录解析 (支持把规则文件与 preset 放一起)。
+    """
+    value = _preset_config().get(key)
+    if not value:
+        return None
+    p = Path(value)
+    if p.is_absolute():
+        return str(p)
+    candidates = [_REPO_ROOT / p, _preset_file().parent / p]
+    return str(next((c for c in candidates if c.exists()), candidates[0]))
+
+
 def _db_path() -> Path:
-    return Path(os.environ.get("PII_DSH_DB_PATH", _DEFAULT_DB))
+    return Path(os.environ.get("PII_DSH_DB_PATH")
+                or _preset_path("db_path") or _DEFAULT_DB)
+
+
+def _whitelist_file() -> str | None:
+    return os.environ.get("PII_DSH_WHITELIST") or _preset_path("whitelist_path")
+
+
+def _custom_rules_spec() -> str | None:
+    return (os.environ.get("PII_DSH_CUSTOM_RULES")
+            or _preset_path("custom_rules_path"))
 
 
 def _whitelist() -> list:
-    """从 PII_DSH_WHITELIST 指定的文件读取白名单 (每行一个词, # 注释)。"""
-    raw = os.environ.get("PII_DSH_WHITELIST")
+    """从白名单文件读取关键词 (每行一个词, # 注释)。"""
+    raw = _whitelist_file()
     if not raw:
         return []
     fp = Path(raw)
@@ -49,7 +106,10 @@ def _whitelist() -> list:
 def _get_engine() -> PresidioPIIEngine:
     global _ENGINE
     if _ENGINE is None:
-        _ENGINE = PresidioPIIEngine(db_path=_db_path(), whitelist=_whitelist())
+        # 自定义规则来源已在此处合并 (env > preset), 显式传入空列表以避免重复加载
+        from .custom_rules import load_custom_rules
+        _ENGINE = PresidioPIIEngine(db_path=_db_path(), whitelist=_whitelist(),
+                                    custom_rules=load_custom_rules(_custom_rules_spec()))
     return _ENGINE
 
 

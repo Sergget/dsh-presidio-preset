@@ -17,7 +17,8 @@
     "db_path": ".pii_presidio_store/sessions.db",
     "session_scope": "conversation",
     "supported_extensions": [".txt", ".md", ".docx", ".xlsx", ".pptx"],
-    "whitelist_path": null
+    "whitelist_path": null,
+    "custom_rules_path": null
   },
   "entity_types": [
     "ID_NUMBER",
@@ -25,6 +26,10 @@
     "EMAIL_ADDRESS",
     "CREDIT_CODE",
     "BANK_CARD",
+    "PASSPORT",
+    "LICENSE_PLATE",
+    "IP_ADDRESS",
+    "MAC_ADDRESS",
     "PERSON",
     "LOCATION",
     "ORGANIZATION",

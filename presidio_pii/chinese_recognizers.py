@@ -339,9 +339,11 @@ class ChineseID15Recognizer(LightRecognizer):
 
 
 class BankCardRecognizer(LightRecognizer):
-    """银行卡: 13-19 位数字且通过 Luhn。
+    """银行卡: 13-19 位数字, Luhn 通过得高分, 未通过降级保留。
 
-    Luhn 是关键过滤: 不加校验时任意长数字串 (订单号/流水号) 都会被判成卡号。
+    Luhn 通过 = 0.80 (高置信卡号);
+    Luhn 失败 = 0.45 (仍脱敏): 抄错一位的卡号同样可能是真实卡号, 脱敏场景召回优先。
+    18 位且行政区划位有效时会被 ID_NUMBER (0.70+) 仲裁胜出, 不受影响。
     """
 
     def __init__(self):
@@ -352,9 +354,8 @@ class BankCardRecognizer(LightRecognizer):
         for m in re.finditer(_RE_BANK, text):
             raw = m.group()
             digits = re.sub(r"[ \-]", "", raw)
-            if not _luhn(digits):
-                continue
-            out.append(RecognizerResult(m.start(), m.end(), self.entity_type, 0.80))
+            score = 0.80 if _luhn(digits) else 0.45
+            out.append(RecognizerResult(m.start(), m.end(), self.entity_type, score))
         return out
 
 

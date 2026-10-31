@@ -55,18 +55,31 @@ def _demo() -> None:
     engine.registry.delete_session(sid)
 
 
-def _make_engine(persistent: bool = False, whitelist=None) -> PresidioPIIEngine:
+def _make_engine(persistent: bool = False, whitelist=None,
+                 rules: str | None = None) -> PresidioPIIEngine:
     """创建引擎。
 
     默认用内存映射库: 裸脚本的对应关系落在 CSV, 不需要逐条写盘 (实测快约 25 倍)。
     仅当需要跨文件复用同一会话 (--session) 或回退到映射库时才走持久化 SQLite,
     路径可用环境变量 PII_DSH_DB_PATH 覆盖 (与 preset 共用同一开关)。
+    rules 为 --rules 传入的自定义规则文件 (分号分隔), 未传时引擎自己读
+    PII_DSH_CUSTOM_RULES 环境变量。显式传入的规则走严格模式: 文件缺失或
+    规则全部非法时抛 RulesLoadError, 由调用方转为非零退出, 避免静默漏检。
     """
-    if not persistent:
-        return PresidioPIIEngine(db_path=":memory:", whitelist=whitelist)
-    db_path = os.environ.get("PII_DSH_DB_PATH")
-    return (PresidioPIIEngine(db_path=db_path, whitelist=whitelist) if db_path
-            else PresidioPIIEngine(whitelist=whitelist))
+    kwargs: dict = {"whitelist": whitelist}
+    if rules:
+        from .custom_rules import RulesLoadError, load_custom_rules
+        custom = load_custom_rules(rules, strict=True)
+        if not custom:
+            raise RulesLoadError(f"规则文件未产出任何规则: {rules}")
+        kwargs["custom_rules"] = custom
+    if persistent:
+        db_path = os.environ.get("PII_DSH_DB_PATH")
+        if db_path:
+            kwargs["db_path"] = db_path
+    else:
+        kwargs["db_path"] = ":memory:"
+    return PresidioPIIEngine(**kwargs)
 
 
 def _load_whitelist(path: str | None, keep: list | None) -> list:
@@ -247,7 +260,12 @@ def _cmd_redact(args: argparse.Namespace) -> int:
         print(f"[error] {exc}", file=sys.stderr)
         return 1
 
-    engine = _make_engine(persistent=bool(args.session), whitelist=whitelist)
+    try:
+        engine = _make_engine(persistent=bool(args.session), whitelist=whitelist,
+                              rules=getattr(args, "rules", None))
+    except Exception as exc:  # RulesLoadError: 显式规则加载失败必须中止
+        print(f"[error] {exc}", file=sys.stderr)
+        return 1
     doc_id = args.doc_id or src.name
     sid = args.session or engine.registry.create_session(doc_id)
     _vlog(verbose, f"[2/4] 开始识别与脱敏 (session_id={sid}, "
@@ -392,6 +410,10 @@ def main(argv: list | None = None) -> int:
                        help="白名单文件: 每行一个关键词, 命中的区域不脱敏 (# 开头为注释)")
     p_red.add_argument("--keep", action="append", metavar="TERM",
                        help="白名单关键词, 可重复 (与 --whitelist 合并)")
+    p_red.add_argument("--rules", metavar="FILE",
+                       help="自定义识别规则文件, 分号分隔多个 "
+                            "(.json=正则模板, .py=代码规则); "
+                            "也可用环境变量 PII_DSH_CUSTOM_RULES")
     p_red.add_argument("-v", "--verbose", action="store_true", help="显示处理过程与进度")
 
     p_res = sub.add_parser("restore", help="还原脱敏文档")

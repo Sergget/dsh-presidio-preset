@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List
 
 from .chinese_recognizers import RecognizerResult, get_chinese_recognizers
+from .custom_rules import load_custom_rules
 from .db import SessionRegistry
 from .normalize import NormalizedText
 
@@ -57,8 +58,10 @@ class PresidioPIIEngine:
     其中的 "合肥市" 也不会被单独脱敏)。
     """
 
-    def __init__(self, db_path=None, whitelist=None):
+    def __init__(self, db_path=None, whitelist=None, custom_rules=None):
         self.recognizers = get_chinese_recognizers()
+        self.custom_rules = custom_rules if custom_rules is not None else load_custom_rules()
+        self.recognizers.extend(self.custom_rules)
         self.registry = SessionRegistry(db_path) if db_path else SessionRegistry()
         self.whitelist = [w for w in (whitelist or []) if w]
 
@@ -99,7 +102,9 @@ class PresidioPIIEngine:
         probe = norm.text if norm.changed else text
         results: List[RecognizerResult] = []
         for rec in self.recognizers:
-            results.extend(rec.analyze(probe))
+            # 自定义规则 (wants_raw) 按约定在原文上匹配并返回原文坐标;
+            # 内置识别器在归一化文本上识别, 命中后映射回原文坐标
+            results.extend(rec.analyze(text if getattr(rec, "wants_raw", False) else probe))
         if norm.changed:
             mapped = []
             for r in results:

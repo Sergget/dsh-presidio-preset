@@ -87,12 +87,12 @@ def test_ip_and_mac(engine):
 
 
 def test_bank_card_requires_luhn(engine):
-    """Luhn 校验: 合法卡号命中, 普通长数字串不命中。"""
+    """Luhn 校验: 合法卡号高分命中; 不过 Luhn 的串降级 0.45 保留, 仍脱敏。"""
     eng = engine
     assert "BANK_CARD" in _types(eng, "卡号 6222021234567890123").values() or True
-    # 明确不过 Luhn 的串不得判为卡号
+    # 不过 Luhn 的串: 降级保留 (召回优先), 不再裸漏
     hits = _types(eng, "订单号 1234567890123456789")
-    assert "BANK_CARD" not in hits.values(), hits
+    assert hits.get("1234567890123456789") == "BANK_CARD", hits
 
 
 # --------------------------------------------------------------------------- #
