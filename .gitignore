@@ -14,5 +14,7 @@ __pycache__/
 # 合成测试语料 (由 tools/gen_test_corpus.py 生成, 含基础文档内容)
 testdata/
 testdata_v2/
+# 人工标注真值集 (含待标注原文, 由 tools/build_truthset.py 生成)
+truthset/
 build/
 dist/

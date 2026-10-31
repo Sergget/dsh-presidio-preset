@@ -211,14 +211,17 @@ def make_credit(rng: random.Random) -> str:
 
 
 def make_bank_card(rng: random.Random) -> str:
-    """16 位银行卡号, 通过 Luhn 校验。"""
+    """16 位银行卡号, 通过标准 Luhn 校验。
+
+    标准 Luhn: 从右往左, 校验位为第 1 位 (不乘 2), 其余隔位乘 2。
+    """
     digits = [int(c) for c in rng.choice(["622202", "621226", "622848", "621700", "436742"])]
     digits += [rng.randint(0, 9) for _ in range(9)]
 
     def luhn(ds):
         total = 0
         for i, d in enumerate(reversed(ds)):
-            if i % 2 == 0:
+            if i % 2 == 1:          # 校验位是第 0 位, 不参与乘 2
                 d *= 2
                 if d > 9:
                     d -= 9

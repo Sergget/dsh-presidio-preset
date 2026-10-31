@@ -6,11 +6,13 @@ A local, lightweight, reversible PII (Personally Identifiable Information) de-id
 
 ## Features
 
-- **Multi-Entity Recognition**: Identifies Chinese names, ID cards (with checksum validation), mobile numbers, emails, unified social credit codes, bank cards, province/city/county-level administrative regions (`LOCATION`), organizations (`ORGANIZATION`), and job titles (`JOB_TITLE`).
+- **Multi-Entity Recognition**: Identifies Chinese names, ID cards (18-digit with checksum and legacy 15-digit), mobile and landline numbers, emails, unified social credit codes, bank cards (Luhn-checked), passports, license plates, IP/MAC addresses, province/city/county-level administrative regions (`LOCATION`), organizations (`ORGANIZATION`), and job titles (`JOB_TITLE`).
+- **Variant Tolerant**: full-width digits and letters, separators inside numbers (`138 0013 8000`), line-broken IDs and names with inner spaces are normalized before matching, so non-standard formatting is still redacted — and restoration still maps back to the original text.
 - **Boundary-Aware Filtering**: every match must sit on a word boundary, so mid-word fragments are rejected (`容要求` out of `内容要求`, `所有部` out of `所有部门`, `委员` out of `政协委员`). With the optional jieba segmenter installed, candidates must also align with token boundaries and POS tags (`nr` for names, `ns` for places), which removes nearly all false positives.
 - **Reversible Anonymization**: Replaces sensitive data with collision-resistant Unicode placeholders (e.g., `⟦PII:ID_NUMBER:0001⟧`).
 - **SQLite Session Registry**: Tracks session-specific mappings in a lightweight local SQLite database to guarantee 100% loss-less text restoration after the LLM responds.
 - **Office Document Support**: Hooks for `.docx`, `.pptx`, `.xlsx`, and plain text.
+- **Wide Format Coverage**: redact/restore for `.docx` (paragraphs, tables, headers/footers, text boxes, comments, tracked changes, footnotes), `.xlsx` (cells and cell comments), `.pptx` (text frames, tables, notes), plus `.txt`, `.md`, `.csv`, `.json`, `.xml`, `.html`, `.eml`, `.rtf`. `.pdf`, `.doc` and `.xls` are detection-only — they can be scanned but not written back.
 - **Whitelist**: protect specific keywords — `--whitelist FILE` (one term per line) or `--keep TERM` on the CLI, `PII_DSH_WHITELIST` for the DSH preset. Any detected entity that overlaps a protected term is left untouched.
 
 ## Quick Start
