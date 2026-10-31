@@ -9,6 +9,9 @@
 | **标准 cordis preset**（推荐） | `agent.cordis.yml` + `preset.yml` + `skills/presidio-pii/SKILL.md` | dsh 0.2.x（本机实测版本 0.2.1-rc.5） | ✅ 可用 |
 | 钩子契约入口（原方案） | `preset.json` + `hook.py` | 能挂载 Python 钩子的 DSH 运行时 | ⚠️ dsh 0.2.x 不提供该接缝，原样不可加载 |
 
+> **要跑测试？直接看 [`START-HERE.md`](START-HERE.md)** —— 里面有可直接粘贴到新会话的启动提示词，
+> 以及每条约束的实测依据。
+
 ## 标准 cordis preset（推荐用法）
 
 ### 工作原理

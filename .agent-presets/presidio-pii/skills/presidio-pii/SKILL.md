@@ -90,3 +90,6 @@ $env:PII_DSH_WHITELIST = 'C:\path\whitelist.txt'   # 每行一个关键词，# �
 - 素材在 `testdata_v2/`（7 类虚构文档 + manifest 真值 + 白名单，全部虚构）。
 - 核对工具 `tools/verify_check.py`（沙箱友好版：**pwsh 预建产物目录后**再跑）。
 - 三项判定：泄漏检查 / 还原无损 / 占位符清零，全过才算 PASS。
+
+要开一个新会话跑这套核对，直接用 preset 根目录 `START-HERE.md` 里的可复制提示词
+（含模式确认、素材重建、四格式核对命令、判定标准与红线）。
