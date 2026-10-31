@@ -18,3 +18,4 @@ testdata_v2/
 truthset/
 build/
 dist/
+eval_result.json
