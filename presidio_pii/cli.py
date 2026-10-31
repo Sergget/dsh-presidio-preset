@@ -33,7 +33,8 @@ def _demo() -> None:
     手机号 13800138000, 邮箱 a.b@bank.com, 统信社 91110000123456787H。
     李明在重庆市渝北区经纪有限公司担任总经理, 电话留给李飞。
     """
-    engine = PresidioPIIEngine()
+    # 用默认内存映射库: demo 不落盘 SQLite, 否则会在 cwd 下创建 .pii_presidio_store
+    engine = _make_engine()
     sid = engine.registry.create_session("demo")
 
     print("---- ORIGINAL ----")

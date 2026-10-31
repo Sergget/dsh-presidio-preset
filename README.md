@@ -118,4 +118,12 @@ See [tools/README.md](tools/README.md) for details.
 - **`presidio_pii/cli.py`**: Command-line interface.
 - **`tools/`**: standalone document checker, DSH flow simulator, synthetic corpus generator and evaluator.
 - **`docs/ROADMAP.md`**: development plan, including the optional NER model tiers.
-- **`.agent-presets/presidio-pii/`**: DeepSeek Harness (DSH) agent preset integration.
+- **`.agent-presets/presidio-pii/`**: DeepSeek Harness (DSH) agent preset integration — two
+  forms coexist:
+  - `preset.json` + `hook.py`: the hook-contract entry (before_llm / after_llm). This
+    form targets a DSH runtime that mounts Python hooks; current dsh 0.2.x does not
+    provide that seam, so it is **not loadable as-is** on dsh 0.2.x.
+  - `agent.cordis.yml` + `preset.yml` + `skills/presidio-pii/SKILL.md`: the standard
+    cordis preset, compatible with dsh 0.2.x. It enforces a redact-first workflow
+    (CLI redaction before any prompt/tool I/O, lossless restore after), verified
+    against dsh 0.2.1-rc.5.

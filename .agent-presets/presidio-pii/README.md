@@ -1,42 +1,107 @@
 # presidio-pii — DSH Agent Preset
 
-为 DeepSeek Harness (DSH) 提供本地可逆 PII 脱敏:提示离开 harness 前脱敏,LLM 响应返回后还原。全程离线,零 spaCy/PyTorch 依赖。
+为 DeepSeek Harness (DSH) 提供本地可逆 PII 脱敏能力。全程离线，零 spaCy/PyTorch 依赖。
 
-## 工作原理
+本目录包含**两种集成形态**，适用不同的 DSH 运行时：
+
+| 形态 | 文件 | 适用运行时 | 当前状态 |
+|------|------|-----------|---------|
+| **标准 cordis preset**（推荐） | `agent.cordis.yml` + `preset.yml` + `skills/presidio-pii/SKILL.md` | dsh 0.2.x（本机实测版本 0.2.1-rc.5） | ✅ 可用 |
+| 钩子契约入口（原方案） | `preset.json` + `hook.py` | 能挂载 Python 钩子的 DSH 运行时 | ⚠️ dsh 0.2.x 不提供该接缝，原样不可加载 |
+
+## 标准 cordis preset（推荐用法）
+
+### 工作原理
 
 ```
-用户 prompt ──> before_llm ──> ⟦PII:PERSON:0001⟧的身份证是⟦PII:ID_NUMBER:0001⟧ ──> LLM
-                                                                        │
-用户看到原文 <── after_llm <── 张伟的身份证是⟦...⟧(还原后完整原文) <──────┘
+用户提出敏感文档任务
+      │
+      ▼
+agent 检测文本/文档含 PII
+      │
+      ▼
+python -m presidio_pii.cli redact <文件>   ← 脱敏发生在 prompt/工具 I/O 之前
+      │                                    （产出 <名>-redacted/ + .mapping.csv）
+      ▼
+用脱敏文本作为工作副本：分析、编辑、送入 LLM 上下文、工具调用
+      │
+      ▼
+python -m presidio_pii.cli restore <脱敏文件>  ← 无损还原
+      │
+      ▼
+验证还原产物与原文一致，交付用户可见输出
 ```
 
-- 脱敏映射存入本地 SQLite (`presidio_pii.db.SessionRegistry`)
-- 占位符使用 Unicode 全角括号 `⟦ ⟧`,抗 LLM 篡改/误改
-- 同一会话 (conversation_id) 多轮请求共享映射表,任何一轮的响应都能还原
+与透明拦截方案（`preset.json` 钩子）的本质区别：**脱敏是 agent 工作流的一个显式步骤，不是运行时改写请求**。dsh 0.2.x 的 LLM 请求深度冻结（扩展只读），请求改写型钩子没有挂载点；本形态按 dsh 支持的扩展方式实现同等防护目标。
 
-## 集成方式
+### 部署
 
-1. 安装本包: `pip install -e <repo-root>`
-2. 在 DSH preset 配置中引用 `preset.json` 声明的两个钩子:
-   - `before_llm(prompt, conversation_id)` → 脱敏文本
-   - `after_llm(response, conversation_id)` → `(还原文本, 统计字典)`, 只需文本时取 `[0]`
-   - 每次调用自动写入结构化日志 `.pii_presidio_store/hook_log.jsonl` (可用 `PII_DSH_LOG_PATH=0` 关闭)
-3. `conversation_id` 由 DSH 传入;未传入时按日期派生,同一天内共享会话
+1. 安装引擎（一次性）：
+   ```powershell
+   cd <仓库根目录>
+   pip install -e .
+   pip install -e ".[segment]"   # 可选：jieba 分词，人名/地名精度显著提升
+   ```
+2. 把本目录（`presidio-pii/`，含 `agent.cordis.yml`、`preset.yml`、`skills/`）复制到
+   `$DSH_HOME/.agent-presets/presidio-pii/`。
+3. 在 DSH 会话中把 Agent Preset 切换为「PII 防护模式」，或新会话点名使用。
+4. 验证（可选）：
+   - **声明合法性**：`dsh --profile web --patch <声明文件> --dump-config` 应 exit 0 且输出
+     含 `preset-presidio-pii` 条目。声明文件用 `insert` 方言（见下）。
+   - **实际可用性**：重启 dsh GUI 或新开会话，在 Agent Preset 选择器中应出现
+     「PII 防护模式」。用户预设目录（`.agent-presets/`）由 GUI 运行时扫描，
+     `--dump-config` 不显示用户目录预设——这是预期行为，不是部署失败。
 
-## 配置
+   声明文件示例（`presidio-pii-preset.patch.yml`）：
 
-| 字段 | 默认值 | 说明 |
+   ```yaml
+   - insert:
+       - id: preset-presidio-pii
+         name: '@deepseek-ai/dsh-agent-preset'
+         config:
+           id: presidio-pii
+           name: PII 防护模式
+           description: 敏感文档 PII 脱敏工作流
+           order: 3
+           plugins: []
+   ```
+
+   已在 dsh 0.2.1-rc.5 上实测：insert 注入后 dump 组合输出 exit 0，条目完整呈现。
+
+### 配置
+
+配置通过环境变量完成，无需改 preset 文件：
+
+| 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `db_path` | `<repo>/.pii_presidio_store/sessions.db` | 映射库位置 |
-| `session_scope` | `conversation` | 会话粒度 |
-| `supported_extensions` | txt/md/docx/xlsx/pptx | 文档格式 |
-| `whitelist_path` | `null` | 白名单文件（每行一个关键词，`#` 注释）；等价于环境变量 `PII_DSH_WHITELIST` |
-| `custom_rules_path` | `null` | 自定义识别规则文件，分号分隔多个；等价于环境变量 `PII_DSH_CUSTOM_RULES` |
-| `rules_reload_interval` | `1.0` | 规则文件热更新检查间隔（秒）；`0` 关闭自动检查，等价于环境变量 `PII_DSH_RULES_RELOAD` |
+| `PII_DSH_DB_PATH` | `<仓库>/.pii_presidio_store/sessions.db` | 映射库位置 |
+| `PII_DSH_LOG_PATH` | `<仓库>/.pii_presidio_store/hook_log.jsonl` | 流程日志；`0` 关闭 |
+| `PII_DSH_WHITELIST` | 无 | 白名单文件（每行一个关键词，`#` 注释） |
+| `PII_DSH_CUSTOM_RULES` | 无 | 自定义规则文件，分号分隔（.json 正则模板 / .py 代码规则） |
+| `PII_DSH_RULES_RELOAD` | `1` | 规则热更新检查间隔（秒）；`0` 关闭 |
+
+## 钩子契约入口（原方案，存档性质）
+
+`preset.json` 声明两个钩子，`hook.py` 提供薄 shim：
+
+- `hook.before_llm(prompt, conversation_id)` → 脱敏文本
+- `hook.after_llm(response, conversation_id)` → `(还原文本, 统计字典)`，只需文本取 `[0]`
+- 会话语义：`session_id` 由 `conversation_id` 派生（稳定哈希），同一会话多轮共享映射表；
+  未传入时按日期派生，同一天内共享
+- 占位符使用 Unicode 全角括号 `⟦ ⟧`，抗 LLM 篡改/误改
+- 每次调用自动写入结构化日志 `.pii_presidio_store/hook_log.jsonl`（`PII_DSH_LOG_PATH=0` 关闭）
 
 `config` 段由 `presidio_pii/hooks.py` 直接读取，优先级 **环境变量 > preset.json > 内置默认值**。
-相对路径先按仓库根目录解析，不存在时再按 preset.json 所在目录解析。
 `preset.json` 自身路径可用 `PII_DSH_PRESET` 覆盖。
+
+**限制**：该形态依赖 DSH 运行时提供「LLM 请求前/响应后」Python 钩子接缝。dsh 0.2.x 的
+LLM 请求深度冻结（监听器与适配器只读），且 preset 只接受 cordis 插件声明、不扫描
+`preset.json`，因此该形态在当前 dsh 上不可加载。保留此文件作为钩子契约的规范定义，
+供支持 Python 钩子的运行时或未来 dsh 版本使用。
+
+## 识别实体
+
+`ID_NUMBER`(身份证,含校验位)、`PHONE_NUMBER`、`EMAIL_ADDRESS`、`CREDIT_CODE`(统一社会信用代码)、`BANK_CARD`(Luhn 通过 0.80 / 未通过降级 0.45 保留)、`PASSPORT`(护照)、`LICENSE_PLATE`(车牌)、`IP_ADDRESS`/`MAC_ADDRESS`、`PERSON`(中文人名)、`LOCATION`(县级行政区)、`ORGANIZATION`、`JOB_TITLE`
 
 ## 白名单
 
@@ -57,10 +122,6 @@ export PII_DSH_WHITELIST=/path/to/whitelist.txt
 合肥市数据资源局
 ```
 
-## 识别实体
-
-`ID_NUMBER`(身份证,含校验位)、`PHONE_NUMBER`、`EMAIL_ADDRESS`、`CREDIT_CODE`(统一社会信用代码)、`BANK_CARD`(Luhn 通过 0.80 / 未通过降级 0.45 保留)、`PASSPORT`(护照)、`LICENSE_PLATE`(车牌)、`IP_ADDRESS`/`MAC_ADDRESS`、`PERSON`(中文人名)、`LOCATION`(县级行政区)、`ORGANIZATION`、`JOB_TITLE`
-
 ## 自定义识别规则
 
 内置实体覆盖不到的业务标识符（工号、会员号、订单号、内部编号等）可通过规则文件扩展，无需改引擎源码。DSH agent 可直接按模板生成规则文件并注入 `custom_rules_path` 或环境变量 `PII_DSH_CUSTOM_RULES`。
@@ -68,7 +129,7 @@ export PII_DSH_WHITELIST=/path/to/whitelist.txt
 ### 接入开关（四层等价）
 
 | 层 | 写法 |
-|---|---|
+| --- |---|
 | preset.json | `"config": { "custom_rules_path": "rules.json;extra.py" }` |
 | 环境变量 | `export PII_DSH_CUSTOM_RULES=/path/rules.json;/path/extra.py` |
 | CLI | `python -m presidio_pii.cli redact 文档.docx --rules rules.json` |
@@ -158,6 +219,6 @@ def analyze(text):
 
 ## 安全注意
 
-- 映射库含明文 PII,`.pii_presidio_store/` 已加入 `.gitignore`,勿提交、勿同步
+- 映射库含明文 PII，`.pii_presidio_store/` 已加入 `.gitignore`，勿提交、勿同步
 - 会话结束后可调用 `SessionRegistry.delete_session(sid)` 清除映射
 - **代码规则文件 import 即执行其中代码**：只加载 `PII_DSH_CUSTOM_RULES` / `custom_rules_path` 明确指向的文件，规则文件应与配置一样受访问控制保护，勿指向不可信来源；热更新会在文件变更后重新 import，信任边界不变

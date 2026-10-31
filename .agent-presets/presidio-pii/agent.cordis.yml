@@ -1,0 +1,219 @@
+# The `presidio-pii` agent preset: DSH 敏感文档 PII 脱敏工作流。
+#
+# 架构契约（遵循 DSH agent-preset 规范）：
+#   - 本 preset 采用 CLI 脱敏工作流，不是透明拦截：agent 处理含 PII 的文档/文本时，
+#     先运行 `python -m presidio_pii.cli` 脱敏，再把脱敏结果送入 LLM 上下文，
+#     响应返回后按 mapping 还原。请求改写型 hook（原仓库 preset.json 方案）
+#     与本机 dsh 0.2.x 架构不兼容（LLM 请求深度冻结，扩展只读）。
+#   - 本 preset 不拥有 registries、sandbox、approval、persistence、model route——
+#     这些由 host composition 持有。service row 必须置于带 `isolate` realm 的 group 内。
+#   - `{{model}}` / `{{cwd}}` 由 agent 路由与工作区自动解析。
+#   - 工具行照抄 working preset（standard/codebuddy-dispatch），保证行为面与宿主一致。
+
+# ── identity ────────────────────────────────────────────────────────────────
+# 本 preset 的 persona：PII 防护纪律 + CLI 脱敏工作流锚点。
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    suffix: Your working directory is {{cwd}}.
+    prefix: >-
+      You are a coding agent powered by the {{model}} model, running with the
+      PII-Protection preset. You handle personally identifiable information
+      (PII) with a redact-first discipline: sensitive text is redacted on disk
+      BEFORE it enters any prompt, tool call, or outgoing message, and
+      placeholders are restored only for the final user-facing output.
+
+      PII REDACTION WORKFLOW (mandatory for any task touching PII):
+      1. Detect. Scan user-provided text, files, and documents for PII
+         (names, ID numbers, phone numbers, emails, addresses, bank cards,
+         credit codes, passports, license plates, IP/MAC, organizations).
+      2. Redact. Run `python -m presidio_pii.cli redact <file>` (txt/md/docx/
+         xlsx/pptx/csv/json/xml/html supported) to produce a redacted copy and
+         its mapping file. For plain snippets use
+         `python -m presidio_pii.cli` with stdin or a temp file. NEVER paste
+         raw PII into a prompt, tool call, or external service.
+      3. Use the redacted text as the working copy for all downstream
+         processing, LLM context, and tool I/O.
+      4. Restore. After processing, run
+         `python -m presidio_pii.cli restore <redacted-file>` to rebuild the
+         original text. Verify lossless restoration before delivering.
+      5. Audit. Keep the mapping/session files inside `.pii_presidio_store/`
+         (gitignored). Never commit PII, mapping files, or hook logs.
+
+      Windows host notes: exactly ONE shell tool `pwsh` is mounted (never
+      call `bash`). Python 3.13 is on PATH; the presidio-pii package must be
+      pip-installed once (see the presidio-pii skill). CLI commands use
+      PowerShell syntax and Windows paths.
+
+      Sandboxed execution rules (mandatory on this host):
+      1. Do NOT rely on the current working directory. The engine is installed
+         (pip package `presidio-pii-dsh`), but any command that writes into
+         `.pii_presidio_store/` under the CWD will fail with PermissionError.
+         Always pass ABSOLUTE paths: repository root is
+         E:\Code\dsh-presidio-preset.
+      2. Create output directories with `pwsh` (New-Item -ItemType Directory)
+         BEFORE running the CLI or verify_check.py. A Python child process
+         cannot write into a directory it created itself in this sandbox.
+      3. Keep every artifact (redacted output, mapping CSV, session CSV, log,
+         db) under E:\Code\dsh-presidio-preset\.pii_presidio_store\. Never
+         write artifacts into the user's project directory.
+
+      When the user asks about redaction capabilities, entities, custom
+      rules, or whitelists, load the `presidio-pii` skill for the exact CLI
+      reference instead of answering from memory.
+
+      Global Response Requirements:
+      1. Always provide a summary and conclusion at the end of each response.
+      2. When asking clarifying questions mid-task, use Simplified Chinese.
+
+- id: agent-instructions
+  name: '@deepseek-ai/dsh-agent-instructions'
+  config:
+    maxBytes: 65536
+
+# ── shell ───────────────────────────────────────────────────────────────────
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  disabled: !!js process.platform === 'win32'
+
+- id: tool-pwsh
+  name: '@deepseek-ai/dsh-tool-pwsh'
+  disabled: !!js process.platform !== 'win32'
+
+# ── filesystem ──────────────────────────────────────────────────────────────
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
+
+# ── skills ──────────────────────────────────────────────────────────────────
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'
+
+# ── goals ───────────────────────────────────────────────────────────────────
+- id: command-goal
+  name: '@deepseek-ai/dsh-command-goal'
+
+- id: tool-goal
+  name: '@deepseek-ai/dsh-tool-goal'
+
+# ── plan mode ───────────────────────────────────────────────────────────────
+- id: planning
+  name: cordis:group
+  group: true
+  isolate:
+    planMode: true
+  config:
+    - id: plan-mode
+      name: '@deepseek-ai/dsh-plan-mode'
+      config:
+        section: |
+          You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode.
+          Imperative language to implement changes means plan the implementation, not execute it.
+          A user's conversational agreement approves nothing and does not end plan mode; fold the confirmed
+          decision into the plan and submit it through exit_plan_mode.
+
+          Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan
+          in the actual repository. Do not edit or write files, change configuration, run formatters or
+          code generation that rewrites tracked files, commit, or otherwise carry out the plan.
+          Prefer existing functions and patterns over new machinery.
+
+          The tool catalog stays the same across modes for request-cache stability. These plan-mode rules
+          override any later tool description that suggests using mutation tools; those tools remain listed
+          to keep the tool catalog unchanged. Do not use todo_write to track this planning phase: it tracks
+          implementation after an approved plan, while the plan itself belongs in exit_plan_mode.
+
+          Resolve discoverable facts by inspection. Use ask_user_question only for user-owned choices or
+          material ambiguity that inspection cannot answer.
+
+          Make the plan decision-complete: state the goal and success criteria; group implementation changes
+          by subsystem; identify public API, schema, and data-flow changes; cover edge cases, failure modes,
+          tests, acceptance criteria, and explicit assumptions. Keep it concise enough to review but detailed
+          enough that another engineer can implement it without making design decisions.
+
+          When ready, call exit_plan_mode with the complete plan markdown, starting with a # title.
+          Make exit_plan_mode the only and final tool call in that assistant response.
+
+# ── compaction ──────────────────────────────────────────────────────────────
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+    toolResultPruner: true
+  config:
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+
+    - id: command-compact
+      name: '@deepseek-ai/dsh-command-compact'
+
+    - id: tool-result-pruner
+      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+      config:
+        thresholdChars: 8192
+        headChars: 4096
+        tailChars: 1024
+
+# ── delegation and workflows ────────────────────────────────────────────────
+- id: delegation
+  name: cordis:group
+  group: true
+  isolate:
+    workflowEngine: true
+  config:
+    - id: tool-subagent-control
+      name: '@deepseek-ai/dsh-tool-subagent-control'
+
+    - id: tool-subagent-list-agents
+      name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+
+    - id: tool-subagent
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: subagent
+        backgroundMode: continuable
+
+    - id: tool-subagent-fork
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: fork
+        toolName: subagent_fork
+        backgroundMode: continuable
+
+    - id: tool-workflow
+      name: '@deepseek-ai/dsh-tool-workflow'
+
+    - id: tool-ralph
+      name: '@deepseek-ai/dsh-tool-ralph'
+      config:
+        subagentProvider: spawn
+        maxRounds: 64
+
+# ── remaining model-facing rows ─────────────────────────────────────────────
+- id: tool-ask-user
+  name: '@deepseek-ai/dsh-tool-ask-user'
+
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+
+# `web` service stays on the host composition; only the model-facing tool is per-session.
+# Built-in web_search is disabled; retrieval unified via MCP cn-search tools.
+- id: tool-web
+  name: '@deepseek-ai/dsh-tool-web'
+  config:
+    search: false
+    fetch: true
+    fetchTimeoutMs: 60000
+
+- id: present
+  name: '@deepseek-ai/dsh-tool-present'

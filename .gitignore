@@ -19,3 +19,5 @@ truthset/
 build/
 dist/
 eval_result.json
+# 评审/取证期临时产物 (脚本、dump 输出、解包源码), 不入库
+.review_tmp/

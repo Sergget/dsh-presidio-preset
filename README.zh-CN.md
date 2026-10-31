@@ -112,4 +112,9 @@ python tools/eval_corpus.py --dir testdata_v2/
 - **`presidio_pii/cli.py`**：命令行接口。
 - **`tools/`**：无 DSH 文档检测、DSH 流程模拟、合成语料生成与评估。
 - **`docs/ROADMAP.md`**：开发计划，含可选的 NER 模型分档。
-- **`.agent-presets/presidio-pii/`**：DeepSeek Harness (DSH) agent preset 集成。
+- **`.agent-presets/presidio-pii/`**：DeepSeek Harness (DSH) agent preset 集成，两种形态并存：
+  - `preset.json` + `hook.py`：钩子契约入口（before_llm / after_llm）。该形态面向
+    能挂载 Python 钩子的 DSH 运行时；当前 dsh 0.2.x 不提供此接缝，**原样不可加载**。
+  - `agent.cordis.yml` + `preset.yml` + `skills/presidio-pii/SKILL.md`：标准 cordis
+    preset，兼容 dsh 0.2.x。它强制「先脱敏后进上下文」工作流（任何 prompt/工具 I/O
+    前先做 CLI 脱敏，处理后无损还原），已在 dsh 0.2.1-rc.5 上验证。

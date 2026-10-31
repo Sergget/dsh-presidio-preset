@@ -148,3 +148,27 @@ python tools/gen_corpus_v2.py --out testdata_v2 --per-type 12 --seed 42
 - `manifest.json` 记录每份文档的类型、格式与真值；`whitelist.txt` 为白名单示例
 - 基础版式由代码生成（`docs/SOURCES.md` 记录了模板下载尝试与不可用原因）
 
+## 7. 沙箱友好核对工具 — `verify_check.py`
+
+`standalone_check.py` 的沙箱适配版, 校验逻辑相同 (泄漏检查 / 还原无损 / 占位符清零),
+但**产物目录必须由调用方预先创建**:
+
+```bash
+# 先建目录 (pwsh: New-Item -ItemType Directory -Force <workdir>)
+python tools/verify_check.py --file testdata_v2/resume/resume-01.docx \
+  --workdir .pii_presidio_store/verify-artifacts \
+  --report .pii_presidio_store/verify_resume01.json
+```
+
+| 参数 | 说明 |
+|------|------|
+| `--file` | 单个待核对文件 (txt/md/docx/xlsx/pptx) |
+| `--workdir` | 产物目录 (**必须已存在**) |
+| `--report` | JSON 报告输出路径 (可选) |
+
+退出码: PASS=0, FAIL=1。
+
+**为什么不用 `standalone_check.py`**: 原版用 `tempfile.mkdtemp()` 建临时目录,
+在 DSH 沙箱内 python 子进程自建目录后写 docx 会被拒 (`PermissionError`);
+本版要求目录预先创建, python 只写文件, 沙箱内可用。
+
