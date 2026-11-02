@@ -6,8 +6,9 @@
 
 | 形态 | 文件 | 适用运行时 | 当前状态 |
 |------|------|-----------|---------|
-| **标准 cordis preset**（推荐） | `agent.cordis.yml` + `preset.yml` + `skills/presidio-pii/SKILL.md` | dsh 0.2.x（本机实测版本 0.2.1-rc.5） | ✅ 可用 |
-| 钩子契约入口（原方案） | `preset.json` + `hook.py` | 能挂载 Python 钩子的 DSH 运行时 | ⚠️ dsh 0.2.x 不提供该接缝，原样不可加载 |
+| **bundle 声明行 preset**（推荐，唯一正路） | `bundle/package.json` + `bundle/cordis.patch.yml` | dsh 0.2.x（本机实测 0.2.1-rc.5） | ✅ 已装并验证 |
+| 目录式预设（已废弃） | `agent.cordis.yml` + `preset.yml` + `skills/` | 仅旧版 dsh | ⚠️ dsh 0.2.x 不再读取该目录 |
+| 钩子契约入口（存档） | `preset.json` + `hook.py` | 能挂载 Python 钩子的 DSH 运行时 | ⚠️ dsh 0.2.x 不提供该接缝 |
 
 > **要跑测试？直接看 [`START-HERE.md`](START-HERE.md)** —— 里面有可直接粘贴到新会话的启动提示词，
 > 以及每条约束的实测依据。
@@ -39,37 +40,29 @@ python -m presidio_pii.cli restore <脱敏文件>  ← 无损还原
 
 ### 部署
 
+> **⚠️ 重要**：`$DSH_HOME/.agent-presets/<id>/` 目录机制在 dsh 0.2.x **已废弃**——官方技能文档
+> `editing-cordis-compositions` 明确「Nothing reads that directory any more」。把目录拷进去
+> **不会**出现在 preset 菜单。唯一正路是 bundle 声明行（下述步骤 2-3）。
+
 1. 安装引擎（一次性）：
    ```powershell
    cd <仓库根目录>
    pip install -e .
    pip install -e ".[segment]"   # 可选：jieba 分词，人名/地名精度显著提升
    ```
-2. 把本目录（`presidio-pii/`，含 `agent.cordis.yml`、`preset.yml`、`skills/`）复制到
-   `$DSH_HOME/.agent-presets/presidio-pii/`。
-3. 在 DSH 会话中把 Agent Preset 切换为「PII 防护模式」，或新会话点名使用。
-4. 验证（可选）：
-   - **声明合法性**：`dsh --profile web --patch <声明文件> --dump-config` 应 exit 0 且输出
-     含 `preset-presidio-pii` 条目。声明文件用 `insert` 方言（见下）。
-   - **实际可用性**：重启 dsh GUI 或新开会话，在 Agent Preset 选择器中应出现
-     「PII 防护模式」。用户预设目录（`.agent-presets/`）由 GUI 运行时扫描，
-     `--dump-config` 不显示用户目录预设——这是预期行为，不是部署失败。
+2. 用 bundle 安装 preset（本目录 `bundle/` 下双件套：`package.json` + `cordis.patch.yml`，
+   plugins 逐字取自 `agent.cordis.yml`）：
+   - **方式 A（推荐）**：在 dsh 会话内用 `plugin_manager` 工具，
+     `action: install_bundle`，`target` 指向本 `bundle/` 目录绝对路径。
+   - **方式 B**：把 `bundle/cordis.patch.yml` 的内容追加到
+     `$DSH_HOME/cordis.patch.yml`（home patch 层，全 profile 生效；patchReload live 热加载）。
+3. 验证（无需重启）：`dsh --profile web --dump-config` 输出应含 `preset-presidio-pii`
+   与「PII 防护模式」；GUI 新会话的 Agent Preset 选择器中应出现该条目。
+4. `$DSH_HOME/.agent-presets/presidio-pii/` 旧目录可删——官方迁移指引明确
+   「Install it, verify the row, then delete the legacy directory」。仓库内保留本目录作为权威源。
 
-   声明文件示例（`presidio-pii-preset.patch.yml`）：
-
-   ```yaml
-   - insert:
-       - id: preset-presidio-pii
-         name: '@deepseek-ai/dsh-agent-preset'
-         config:
-           id: presidio-pii
-           name: PII 防护模式
-           description: 敏感文档 PII 脱敏工作流
-           order: 3
-           plugins: []
-   ```
-
-   已在 dsh 0.2.1-rc.5 上实测：insert 注入后 dump 组合输出 exit 0，条目完整呈现。
+已在 dsh 0.2.1-rc.5 上实测：home 层追加后 dump 组合输出 exit 0，`preset-presidio-pii`
+完整呈现（17 个插件行 + persona），无需重启。
 
 ### 配置
 
