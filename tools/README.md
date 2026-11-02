@@ -155,18 +155,20 @@ python tools/gen_corpus_v2.py --out testdata_v2 --per-type 12 --seed 42
 
 ```bash
 # 先建目录 (pwsh: New-Item -ItemType Directory -Force <workdir>)
-python tools/verify_check.py --file testdata_v2/resume/resume-01.docx \
+python tools/verify_check.py --files testdata_v2/resume/resume-01.docx \
+  testdata_v2/paper/paper-01.md \
   --workdir .pii_presidio_store/verify-artifacts \
-  --report .pii_presidio_store/verify_resume01.json
+  --report .pii_presidio_store/verify_batch.json
 ```
 
 | 参数 | 说明 |
 |------|------|
-| `--file` | 单个待核对文件 (txt/md/docx/xlsx/pptx) |
+| `--files` | 待核对文件列表 (txt/md/docx/xlsx/pptx, 可多个; 一次进程复用引擎, 批量比单条快约 93%) |
 | `--workdir` | 产物目录 (**必须已存在**) |
 | `--report` | JSON 报告输出路径 (可选) |
+| `--keep` | 保留 redacted/restored 产物 (默认清理 restored 明文文件, 防残留泄漏) |
 
-退出码: PASS=0, FAIL=1。
+退出码: 全部 PASS=0, 任一 FAIL=1。
 
 **为什么不用 `standalone_check.py`**: 原版用 `tempfile.mkdtemp()` 建临时目录,
 在 DSH 沙箱内 python 子进程自建目录后写 docx 会被拒 (`PermissionError`);

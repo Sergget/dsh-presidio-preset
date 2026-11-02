@@ -39,13 +39,16 @@ python tools/gen_corpus_v2.py --out testdata_v2 --per-type 7 --seed 42
 # 1) 预建产物目录（必须 pwsh 建，python 建会踩沙箱 ACL）
 New-Item -ItemType Directory -Force E:\Code\dsh-presidio-preset\.pii_presidio_store\verify-artifacts
 
-# 2) 单文件核对（工作目录任意，但路径全绝对）
-python E:\Code\dsh-presidio-preset\tools\verify_check.py --file E:\Code\dsh-presidio-preset\testdata_v2\resume\resume-01.docx --workdir E:\Code\dsh-presidio-preset\.pii_presidio_store\verify-artifacts
+# 2) 批量核对（一次进程复用引擎，四格式 ~5s，比单条快 ~93%）
+python E:\Code\dsh-presidio-preset\tools\verify_check.py --files `
+  E:\Code\dsh-presidio-preset\testdata_v2\resume\resume-01.docx `
+  E:\Code\dsh-presidio-preset\testdata_v2\paper\paper-01.md `
+  E:\Code\dsh-presidio-preset\testdata_v2\report\report-07.pptx `
+  E:\Code\dsh-presidio-preset\testdata_v2\payroll\payroll-01.xlsx `
+  --workdir E:\Code\dsh-presidio-preset\.pii_presidio_store\verify-artifacts
 
-# 3) 其余格式
-python E:\Code\dsh-presidio-preset\tools\verify_check.py --file E:\Code\dsh-presidio-preset\testdata_v2\paper\paper-01.md --workdir E:\Code\dsh-presidio-preset\.pii_presidio_store\verify-artifacts
-python E:\Code\dsh-presidio-preset\tools\verify_check.py --file E:\Code\dsh-presidio-preset\testdata_v2\report\report-07.pptx --workdir E:\Code\dsh-presidio-preset\.pii_presidio_store\verify-artifacts
-python E:\Code\dsh-presidio-preset\tools\verify_check.py --file E:\Code\dsh-presidio-preset\testdata_v2\payroll\payroll-01.xlsx --workdir E:\Code\dsh-presidio-preset\.pii_presidio_store\verify-artifacts
+# 单文件核对（等价）: --files 只传一个；restored 明文产物默认清理，--keep 保留
+python E:\Code\dsh-presidio-preset\tools\verify_check.py --files E:\Code\dsh-presidio-preset\testdata_v2\resume\resume-01.docx --workdir E:\Code\dsh-presidio-preset\.pii_presidio_store\verify-artifacts
 ```
 
 > 若 `python` 报 `No module named presidio_pii`，先执行
@@ -85,6 +88,8 @@ $env:PII_DSH_WHITELIST = (Resolve-Path testdata_v2\whitelist.txt).Path
 2. **先建目录再核对**：`verify_check.py` 的 `--workdir` 必须已存在（pwsh 创建），否则 PermissionError。
 3. **核对不过不放行**：三项任一 FAIL 时，禁止把「引擎没问题」写进结论；先定位失败单元（输出里 `失败单元` 列表），再看是识别漏/误报还是格式回写问题。
 4. **测试集可重建**：素材损坏时按第一节命令重建（固定 seed 保证可复现），不手改 manifest.json。
+5. **truth.json 明文禁止**：`testdata_v2/truth.json` 含明文 PII 真值（仅供本地 `eval_corpus.py`）——**不得 read、不得引用其中文本**。真值比对只用 `manifest.json` 的 type/hash。
+6. **本模式是自律工作流，不是强制机制**：preset 要求 agent 遵守 redact-first 纪律，但无法阻止模型直接 read/grep 源文件明文。**脱敏不可跳过仅对守规矩的 agent 成立**；源文件、truth.json、`.restored` 产物均为明文，模型按工具权限可读。
 
 ## 五、核对通过后的动作
 

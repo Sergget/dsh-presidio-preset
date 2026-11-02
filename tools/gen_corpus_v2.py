@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import sys
@@ -741,9 +742,15 @@ PLAN = {
 }
 
 
+def _entity_hash(text: str) -> str:
+    """内容哈希 (sha256 前 12 位): 用于 manifest 校验, 不暴露明文。"""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
 def generate(out_dir: Path, per_type: int = 12, seed: int = 42) -> dict:
     rng = random.Random(seed)
     manifest = {"seed": seed, "per_type": per_type, "docs": [], "types": {}}
+    truth_docs = []  # 明文真值, 单独存 truth.json, 仅供本地 eval, 不给模型看
 
     for dtype, variants in PLAN.items():
         count = min(per_type, len(variants))
@@ -756,8 +763,21 @@ def generate(out_dir: Path, per_type: int = 12, seed: int = 42) -> dict:
             path = type_dir / f"{name}.{ext}"
             truth = Truth()
             builder(rng, path, truth)
+            rel = str(path.relative_to(out_dir)).replace("\\", "/")
             manifest["docs"].append({
-                "file": str(path.relative_to(out_dir)).replace("\\", "/"),
+                "file": rel,
+                "type": dtype,
+                "format": ext,
+                # manifest 只存类型/字段/hard 与内容哈希, 不存明文 PII
+                "entities": [{
+                    "type": e["type"],
+                    "field": e.get("field"),
+                    "hard": e.get("hard", False),
+                    "hash": _entity_hash(e["text"]),
+                } for e in truth.items],
+            })
+            truth_docs.append({
+                "file": rel,
                 "type": dtype,
                 "format": ext,
                 "entities": truth.items,
@@ -768,6 +788,11 @@ def generate(out_dir: Path, per_type: int = 12, seed: int = 42) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 明文真值单独存放: 仅供 tools/eval_corpus.py 本地召回评估使用。
+    # 该文件含明文 PII, 已 gitignore, 不得提交、不得提供给模型。
+    (out_dir / "truth.json").write_text(
+        json.dumps({"seed": seed, "docs": truth_docs}, ensure_ascii=False, indent=2),
+        encoding="utf-8")
     (out_dir / "whitelist.txt").write_text(
         "# 语料 v2 白名单示例\n" + "\n".join(manifest["whitelist"]) + "\n",
         encoding="utf-8")
@@ -788,6 +813,8 @@ def main(argv=None) -> int:
     for dtype, n in manifest["types"].items():
         print(f"  {dtype:12} {n} 份")
     print(f"[gen] 真值实体 {total_truth} 条 (seed={args.seed})")
+    print("[gen] manifest.json 已去明文 (实体仅存类型/hash); "
+          "明文真值在 truth.json (仅供本地 eval, 勿提交勿给模型)")
     return 0
 
 

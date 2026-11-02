@@ -35,8 +35,18 @@ def load_whitelist(path: Path | None) -> list:
 
 
 def _load_docs(corpus: Path, manifest: dict):
-    """统一两种 manifest: 产出 (path, doc_type, entities)。"""
-    if "docs" in manifest:
+    """统一两种 manifest: 产出 (path, doc_type, entities)。
+
+    优先从 truth.json 取明文真值 (仅供本地评估); manifest 本身已去明文。
+    无 truth.json 时退化为只报类型分布 (entities 为 None)。
+    """
+    truth_path = corpus / "truth.json"
+    if truth_path.exists():
+        truth = json.loads(truth_path.read_text(encoding="utf-8"))
+        by_file = {d["file"]: d["entities"] for d in truth.get("docs", [])}
+        for doc in manifest["docs"]:
+            yield corpus / doc["file"], doc.get("type", "?"), by_file.get(doc["file"])
+    elif "docs" in manifest:
         for doc in manifest["docs"]:
             yield corpus / doc["file"], doc.get("type", "?"), doc["entities"]
     else:
@@ -72,6 +82,17 @@ def evaluate(corpus: Path, whitelist_path: Path | None = None) -> dict:
         n_docs += 1
         units = [text for _key, text in read_units(path)]
         spans = [[(r.start, r.end, r.entity_type) for r in engine.analyze(t)] for t in units]
+
+        # 无明文真值 (truth.json 缺失) 时只统计识别出的类型分布
+        if entities is None:
+            for ui, utext in enumerate(units):
+                for s, e, etype in spans[ui]:
+                    per_type[etype][1] += 1
+                    per_type[etype][0] += 1
+                    per_doc[doc_type][etype][1] += 1
+                    per_doc[doc_type][etype][0] += 1
+                    n_truth += 1
+            continue
 
         truth_spans = []   # (unit_idx, start, end)
         for ent in entities:

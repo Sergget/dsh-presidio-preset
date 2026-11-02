@@ -91,41 +91,63 @@ def check_file(engine, src: Path, workdir: Path) -> dict:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser("verify_check: 沙箱友好的三项核对")
-    ap.add_argument("--file", required=True, help="单个待核对文件")
+    ap.add_argument("--files", nargs="+", required=True,
+                    help="待核对文件（可多个；一次进程复用引擎，显著提速）")
     ap.add_argument("--workdir", required=True,
                     help="产物目录（必须先由 pwsh 创建）")
     ap.add_argument("--report", help="JSON 报告输出路径")
+    ap.add_argument("--keep", action="store_true",
+                    help="保留 redacted/restored 产物（默认清理 restored，防明文残留）")
     args = ap.parse_args(argv)
 
-    src = Path(args.file)
     workdir = Path(args.workdir)
     engine = PresidioPIIEngine(
         db_path=_REPO_ROOT / ".pii_presidio_store" / "verify_check.db")
 
-    try:
-        report = check_file(engine, src, workdir)
-    except Exception as exc:
-        report = {"file": str(src), "status": "FAIL", "error": repr(exc)}
+    reports = []
+    for f in args.files:
+        src = Path(f)
+        try:
+            report = check_file(engine, src, workdir)
+        except Exception as exc:
+            report = {"file": str(src), "status": "FAIL", "error": repr(exc)}
+        reports.append(report)
 
-    print(f"状态  {report.get('status')}")
-    if "error" in report:
-        print(f"  error: {report['error']}")
-        return 1
-    print(f"  文件   : {report['file']}")
-    print(f"  单元/替换/还原: {report['n_units']}/{report['n_replaced']}/{report['n_restored']}")
-    print(f"  实体分布: {report['entity_counts']}")
-    if report["leaked_pii"]:
-        print(f"  泄漏: {report['leaked_pii']}")
-    failed_units = [r for r in report["unit_results"]
-                    if not (r["roundtrip_equal"] and r["no_placeholder_left"])]
-    if failed_units:
-        print(f"  失败单元: {[r['unit'] for r in failed_units]}")
+        print(f"状态  {report.get('status')}")
+        if "error" in report:
+            print(f"  error: {report['error']}")
+            continue
+        print(f"  文件   : {report['file']}")
+        print(f"  单元/替换/还原: {report['n_units']}/{report['n_replaced']}/{report['n_restored']}")
+        print(f"  实体分布: {report['entity_counts']}")
+        if report["leaked_pii"]:
+            print(f"  泄漏: {report['leaked_pii']}")
+        failed_units = [r for r in report["unit_results"]
+                        if not (r["roundtrip_equal"] and r["no_placeholder_left"])]
+        if failed_units:
+            print(f"  失败单元: {[r['unit'] for r in failed_units]}")
+
+    # 默认清理 restored 产物（明文还原文件），防残留泄漏；redacted 保留供查看
+    if not args.keep:
+        for r in reports:
+            arts = r.get("artifacts") or {}
+            rp = arts.get("restored")
+            if rp:
+                try:
+                    Path(rp).unlink(missing_ok=True)
+                    r["artifacts"] = {k: v for k, v in arts.items() if k != "restored"}
+                except OSError:
+                    pass
+
     if args.report:
         Path(args.report).write_text(
-            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            json.dumps({"all_pass": all(r.get("status") == "PASS" for r in reports),
+                        "results": reports},
+                       ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"  [report] {args.report}")
-    ok = report.get("status") == "PASS"
-    print("[result] PASS" if ok else "[result] FAIL")
+
+    ok = all(r.get("status") == "PASS" for r in reports)
+    print("[result] ALL PASS" if ok else "[result] 存在失败项")
     return 0 if ok else 1
 
 

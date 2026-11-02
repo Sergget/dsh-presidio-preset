@@ -19,11 +19,21 @@
 【任务】在本仓库执行 PII 脱敏链路的端到端核对，并给出带证据的结论。
 仓库根目录：E:\Code\dsh-presidio-preset（下称 <REPO>）。所有命令用绝对路径，不要依赖当前工作目录。
 
-【第零步：确认运行模式】
-先判定你是否运行在「PII 防护模式」preset 下：
-- 若你能加载 presidio-pii 技能（或环境提示已注入 PII 脱敏纪律）→ 记为「模式：PII 防护」。
-- 若不能（preset 未启用/加载失败）→ 记为「模式：标准（降级）」并继续，不要中断。
+【第零步：确认运行模式】（用客观证据，不要凭系统提示词自证）
+用 pwsh 查 patch 层是否含 preset 声明（二选一，能执行哪个用哪个）：
+  Select-String -Path 'E:\Code\dsh_home\profiles\desktop\cordis.patch.yml' -Pattern 'preset-presidio-pii' -SimpleMatch
+  Select-String -Path 'E:\Code\dsh_home\cordis.patch.yml' -Pattern 'preset-presidio-pii' -SimpleMatch
+判定：
+- 任一输出非空 → 「模式：PII 防护」（preset 已声明）。
+- 都为空 → 「模式：标准（降级）」，继续，不要中断。
 两种模式下的核对命令完全相同；差异只在于你是否按 PII 纪律处理后续真实文档。
+
+【重要认知：本模式的边界】
+本 preset 是「agent 自律工作流」，不是运行时强制机制：
+- 它要求 agent 遵守 redact-first 纪律，但**不能阻止** agent 直接 read/grep 源文件明文；
+- 源文件、truth.json（明文真值）、.restored 产物都是明文，模型按工具权限可读；
+- 因此「脱敏是否执行」依赖 agent 遵守纪律，**不可跳过仅对守规矩的 agent 成立**。
+若你发现自己在把明文 PII 贴进 prompt/工具调用，立即停下改用脱敏流程——这正是本模式要防的。
 
 【第一步：读规范】（按顺序读完再动手）
 1. 读 <REPO>\.agent-presets\presidio-pii\skills\presidio-pii\SKILL.md
@@ -51,11 +61,9 @@
 硬性前置（不可跳过）：产物目录必须先用 pwsh 建好，python 子进程自建目录后写 docx 会被沙箱拒绝。
   New-Item -ItemType Directory -Force <REPO>\.pii_presidio_store\verify-artifacts
 
-然后逐条运行，每条都要贴出完整输出：
-  python <REPO>\tools\verify_check.py --file <REPO>\testdata_v2\resume\resume-01.docx --workdir <REPO>\.pii_presidio_store\verify-artifacts
-  python <REPO>\tools\verify_check.py --file <REPO>\testdata_v2\paper\paper-01.md --workdir <REPO>\.pii_presidio_store\verify-artifacts
-  python <REPO>\tools\verify_check.py --file <REPO>\testdata_v2\report\report-07.pptx --workdir <REPO>\.pii_presidio_store\verify-artifacts
-  python <REPO>\tools\verify_check.py --file <REPO>\testdata_v2\payroll\payroll-01.xlsx --workdir <REPO>\.pii_presidio_store\verify-artifacts
+然后批量运行（一次进程处理四份，复用引擎，比单条快 ~93%），贴出完整输出：
+  python <REPO>\tools\verify_check.py --files <REPO>\testdata_v2\resume\resume-01.docx <REPO>\testdata_v2\paper\paper-01.md <REPO>\testdata_v2\report\report-07.pptx <REPO>\testdata_v2\payroll\payroll-01.xlsx --workdir <REPO>\.pii_presidio_store\verify-artifacts
+（单文件也可：--files 只传一个；restored 明文产物默认清理，--keep 保留）
 
 【第四步：判定】（缺一不可）
 对每份样本逐条核对：
@@ -65,12 +73,16 @@ c) 「单元/替换/还原」三数中，替换数 == 还原数；
 d) 还原产物无 ⟦PII:...⟧ 残留。
 任一条不满足即 FAIL，不得四舍五入写成通过。
 
-【第五步：真值比对】
-读 <REPO>\testdata_v2\manifest.json，对每份样本取对应条目的 entities（真值实体），
-与第四步输出的「实体分布」比对：
+【第五步：真值比对】（只用 manifest 的类型/hash，禁止读 truth.json）
+读 <REPO>\testdata_v2\manifest.json，对每份样本取对应条目的 entities（无明文，
+只有 type/field/hard/hash），与第四步输出的「实体分布」比对：
 - 真值中的类型是否都在实体分布里出现；
 - 额外命中（真值没有但引擎识别出的）逐一列出并判断是否合理（文档自带的地名/机构属正常）。
 把「真值命中 / 额外命中 / 缺失类型」三栏做成表。
+
+【红线补充：truth.json 明文禁止】<REPO>\testdata_v2\truth.json 含明文 PII 真值
+（仅供本地 eval_corpus.py 使用）——**不得 read 它、不得把内容贴进 prompt/工具调用、
+不得引用其中文本**。做真值比对只用 manifest.json 的类型与 hash。
 
 【第六步：汇报格式】
 1. 运行模式（PII 防护 / 标准降级）；
