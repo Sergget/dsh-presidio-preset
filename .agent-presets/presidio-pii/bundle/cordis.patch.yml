@@ -1,14 +1,16 @@
 # presidio-pii agent preset 的 bundle patch（dsh 0.2.x 声明行正路）。
 #
-# 背景：$DSH_HOME/.agent-presets/<id>/ 目录机制已废弃——官方技能文档
-# editing-cordis-compositions 明确「Nothing reads that directory any more」，
-# preset 必须以 @deepseek-ai/dsh-agent-preset 声明行（bundle patch）安装。
-# 本文件 plugins 逐字取自同目录 agent.cordis.yml（官方迁移指引要求 verbatim）。
+# 关键：plugins 列表**逐字对齐本机 preset-standard 的权威定义**（取自
+# `dsh --profile web --dump-config` 的 preset-standard 条目），只替换 persona 的
+# config.prefix。不要从 codebuddy-dispatch 等旧目录预设抄 config——那些键
+# （如 tool-web 的 search/fetchTimeoutMs、tool-subagent 的 backgroundMode）
+# 在 0.2.1-rc.5 上过不了 schema 校验，会导致 preset 激活失败（GUI 显示加载失败）。
 #
 # 安装方式（二选一）：
 #   A. plugin_manager 工具，action: install_bundle，target 指向本 bundle 目录；
-#   B. 把下方 insert 块追加到 $DSH_HOME/cordis.patch.yml（home patch 层，全 profile 生效）。
-# 验证：dsh --profile web --dump-config 应含 preset-presidio-pii 条目。
+#   B. 把下方 insert 块追加到 patch 层（desktop profile: profiles/desktop/cordis.patch.yml
+#      或 home 层 $DSH_HOME/cordis.patch.yml），然后**重启 DSH**（0.2.x 无 patch 热加载）。
+# 验证：dsh --profile web --dump-config 应含 preset-presidio-pii；GUI 重启后应出现在菜单。
 - insert:
     - id: preset-presidio-pii
       name: '@deepseek-ai/dsh-agent-preset'
@@ -21,7 +23,6 @@
           - id: persona
             name: '@deepseek-ai/dsh-persona'
             config:
-              suffix: Your working directory is {{cwd}}.
               prefix: >-
                 You are a coding agent powered by the {{model}} model, running with the
                 PII-Protection preset. You handle personally identifiable information
@@ -75,6 +76,8 @@
             name: '@deepseek-ai/dsh-agent-instructions'
             config:
               maxBytes: 65536
+          - id: time-context
+            name: '@deepseek-ai/dsh-time-context'
           - id: tool-bash
             name: '@deepseek-ai/dsh-tool-bash'
             disabled: !!js process.platform === 'win32'
@@ -87,6 +90,10 @@
             name: '@deepseek-ai/dsh-tool-fs-search'
             config:
               sampleOverCapGlobResults: false
+          - id: tool-jobs
+            name: '@deepseek-ai/dsh-tool-jobs'
+          - id: tool-schedule
+            name: '@deepseek-ai/dsh-tool-schedule'
           - id: skill-filesystem
             name: '@deepseek-ai/dsh-skill-filesystem'
           - id: tool-skill
@@ -104,32 +111,53 @@
               - id: plan-mode
                 name: '@deepseek-ai/dsh-plan-mode'
                 config:
-                  section: |
-                    You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode.
-                    Imperative language to implement changes means plan the implementation, not execute it.
-                    A user's conversational agreement approves nothing and does not end plan mode; fold the confirmed
+                  section: >
+                    You are in plan mode. Stay in plan mode until the user approves
+                    your plan through exit_plan_mode or switches the session mode.
+                    Imperative language to implement changes means plan the
+                    implementation, not execute it. A user's conversational
+                    agreement — including an answer confirming something you asked —
+                    approves nothing and does not end plan mode; fold the confirmed
                     decision into the plan and submit it through exit_plan_mode.
 
-                    Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan
-                    in the actual repository. Do not edit or write files, change configuration, run formatters or
-                    code generation that rewrites tracked files, commit, or otherwise carry out the plan.
-                    Prefer existing functions and patterns over new machinery.
+                    Explore first. Use non-mutating reads, searches, static
+                    analysis, and checks to ground the plan in the actual
+                    repository. Do not edit or write files, change configuration,
+                    run formatters or code generation that rewrites tracked files,
+                    commit, or otherwise carry out the plan. Prefer existing
+                    functions and patterns over new machinery.
 
-                    The tool catalog stays the same across modes for request-cache stability. These plan-mode rules
-                    override any later tool description that suggests using mutation tools; those tools remain listed
-                    to keep the tool catalog unchanged. Do not use todo_write to track this planning phase: it tracks
-                    implementation after an approved plan, while the plan itself belongs in exit_plan_mode.
+                    The tool catalog stays the same across modes for request-cache
+                    stability. These plan-mode rules override any later tool
+                    description or guidance that suggests using mutation tools;
+                    those tools remain listed to keep the tool catalog unchanged. Do
+                    not use todo_write to track this planning phase: it tracks
+                    implementation after an approved plan, while the plan itself
+                    belongs in exit_plan_mode.
 
-                    Resolve discoverable facts by inspection. Use ask_user_question only for user-owned choices or
-                    material ambiguity that inspection cannot answer.
+                    Resolve discoverable facts by inspection. Use ask_user_question
+                    only for user-owned choices or material ambiguity that
+                    inspection cannot answer. Do not ask the user where code lives
+                    or how current behavior works when you can find out.
 
-                    Make the plan decision-complete: state the goal and success criteria; group implementation changes
-                    by subsystem; identify public API, schema, and data-flow changes; cover edge cases, failure modes,
-                    tests, acceptance criteria, and explicit assumptions. Keep it concise enough to review but detailed
-                    enough that another engineer can implement it without making design decisions.
+                    Make the plan decision-complete: state the goal and success
+                    criteria; group implementation changes by subsystem; identify
+                    public API, schema, and data-flow changes; cover edge cases,
+                    failure modes, tests, acceptance criteria, and explicit
+                    assumptions. Keep it concise enough to review but detailed
+                    enough that another engineer can implement it without making
+                    design decisions.
 
-                    When ready, call exit_plan_mode with the complete plan markdown, starting with a # title.
-                    Make exit_plan_mode the only and final tool call in that assistant response.
+                    When ready, call exit_plan_mode with the complete plan markdown,
+                    starting with a # title. Make exit_plan_mode the only and final
+                    tool call in that assistant response: it presents the plan for
+                    approval, and implementation begins only in a later step after
+                    approval. Do not paste the final plan as a plain reply or ask
+                    "should I proceed?" through prose or ask_user_question. If
+                    review rejects it, incorporate the feedback and present again.
+                    If the review channel is unavailable or aborted, stay in plan
+                    mode and ask the user to switch modes manually; do not proceed
+                    with implementation.
           - id: compaction
             name: cordis:group
             group: true
@@ -162,20 +190,18 @@
                 config:
                   provider: spawn
                   toolName: subagent
-                  backgroundMode: continuable
+                  modelSelectionSettings: true
               - id: tool-subagent-fork
                 name: '@deepseek-ai/dsh-tool-subagent'
                 config:
                   provider: fork
                   toolName: subagent_fork
-                  backgroundMode: continuable
+              - id: workflow-ptc
+                name: '@deepseek-ai/dsh-workflow-ptc'
+                config:
+                  provider: spawn
               - id: tool-workflow
                 name: '@deepseek-ai/dsh-tool-workflow'
-              - id: tool-ralph
-                name: '@deepseek-ai/dsh-tool-ralph'
-                config:
-                  subagentProvider: spawn
-                  maxRounds: 64
           - id: tool-ask-user
             name: '@deepseek-ai/dsh-tool-ask-user'
           - id: tool-todo
@@ -185,8 +211,13 @@
           - id: tool-web
             name: '@deepseek-ai/dsh-tool-web'
             config:
-              search: false
               fetch: true
-              fetchTimeoutMs: 60000
+              searchTimeoutMs: 60000
           - id: present
             name: '@deepseek-ai/dsh-tool-present'
+          - id: tool-plugin-manager
+            name: '@deepseek-ai/dsh-plugin-manager/tools'
+            disabled: true
+          - id: tool-plugin-market
+            name: '@deepseek-ai/dsh-plugin-market/tools'
+            disabled: true
