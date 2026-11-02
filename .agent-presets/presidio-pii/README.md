@@ -54,15 +54,23 @@ python -m presidio_pii.cli restore <脱敏文件>  ← 无损还原
    plugins 逐字取自 `agent.cordis.yml`）：
    - **方式 A（推荐）**：在 dsh 会话内用 `plugin_manager` 工具，
      `action: install_bundle`，`target` 指向本 `bundle/` 目录绝对路径。
-   - **方式 B**：把 `bundle/cordis.patch.yml` 的内容追加到
-     `$DSH_HOME/cordis.patch.yml`（home patch 层，全 profile 生效；patchReload live 热加载）。
-3. 验证（无需重启）：`dsh --profile web --dump-config` 输出应含 `preset-presidio-pii`
-   与「PII 防护模式」；GUI 新会话的 Agent Preset 选择器中应出现该条目。
+   - **方式 B**：把 `bundle/cordis.patch.yml` 的内容追加到 patch 层：
+     - GUI 用的 **desktop profile**：`$DSH_HOME/profiles/desktop/cordis.patch.yml`
+     - 其它 profile / 全局：`$DSH_HOME/cordis.patch.yml`（home 层）
+3. **验证（需先重启 DSH）**：
+   - 组合层：`dsh --profile web --dump-config` 输出应含 `preset-presidio-pii`
+     与「PII 防护模式」（desktop profile 由 Electron 独占管理，CLI 不能 dump）。
+   - GUI：重启后新建会话，Agent Preset 选择器应出现「PII 防护模式」。
 4. `$DSH_HOME/.agent-presets/presidio-pii/` 旧目录可删——官方迁移指引明确
    「Install it, verify the row, then delete the legacy directory」。仓库内保留本目录作为权威源。
 
-已在 dsh 0.2.1-rc.5 上实测：home 层追加后 dump 组合输出 exit 0，`preset-presidio-pii`
-完整呈现（17 个插件行 + persona），无需重启。
+> **⚠️ 必须重启 DSH（GUI）**：dsh 0.2.x **没有 patch 热加载**。`patchReload: "live"` 只存在于
+> **web** profile 的 `package.json`，desktop profile 没有该字段；asar 全量检索中 `patchReload`
+> 零命中（它是 profile 声明字段，不是代码字符串）。改完 patch 必须重启 Electron 应用，
+> 只刷新浏览器无效。
+
+已在 dsh 0.2.1-rc.5 上实测：home 层追加后 `dsh --profile web --dump-config` exit 0，
+`preset-presidio-pii` 完整呈现（17 个插件行 + persona）。
 
 ### 配置
 
