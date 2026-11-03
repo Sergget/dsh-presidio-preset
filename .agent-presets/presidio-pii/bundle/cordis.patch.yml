@@ -94,6 +94,8 @@
             name: '@deepseek-ai/dsh-tool-jobs'
           - id: tool-schedule
             name: '@deepseek-ai/dsh-tool-schedule'
+          - id: pii-guard
+            name: 'file:///E:/Code/dsh_home/plugins/dsh-pii-guard/lib/index.js'
           - id: skill-filesystem
             name: '@deepseek-ai/dsh-skill-filesystem'
             config:
