@@ -13,7 +13,7 @@ __pycache__/
 *-restored/
 # 合成测试语料 (由 tools/gen_test_corpus.py 生成, 含基础文档内容)
 testdata/
-testdata_v2/
+testdata_v2/*
 # 例外: 负样本(无 PII 误伤测试)不含个人信息, 需入库
 !testdata_v2/negative/
 # 人工标注真值集 (含待标注原文, 由 tools/build_truthset.py 生成)
