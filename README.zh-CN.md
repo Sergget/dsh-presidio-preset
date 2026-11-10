@@ -118,3 +118,23 @@ python tools/eval_corpus.py --dir testdata_v2/
   - `agent.cordis.yml` + `preset.yml` + `skills/presidio-pii/SKILL.md`：标准 cordis
     preset，兼容 dsh 0.2.x。它强制「先脱敏后进上下文」工作流（任何 prompt/工具 I/O
     前先做 CLI 脱敏，处理后无损还原），已在 dsh 0.2.1-rc.5 上验证。
+- **`plugins/dsh-pii-guard/lib/index.js`**：DSH `tools/post-execute` 拦截插件（read/grep/pwsh/
+  job_output/job_list）。安装位置为 `E:/Code/dsh_home/plugins/dsh-pii-guard/lib/index.js`，
+  两边必须逐字节一致（门禁 #5 校验），改完需完全重启 DSH。
+
+## 发布与门禁
+
+```powershell
+# 一键发布门禁（逐项 PASS/FAIL/SKIP/MANUAL，--json 落盘证据）
+& "D:\Python\313\python.exe" tools\release_gate.py --json "$env:TEMP\release_gate.json"
+
+# 仅外部语料回归（从网络下载公开样例，离线返回 SKIP，不允许本地语料替代）
+& "D:\Python\313\python.exe" tools\external_corpus_check.py
+```
+
+判据、证据与未决项见 [docs/RELEASE-GATE.md](docs/RELEASE-GATE.md)，发布/回退操作见
+[docs/RELEASE-RUNBOOK.md](docs/RELEASE-RUNBOOK.md)。插件同步：
+
+```powershell
+Copy-Item plugins\dsh-pii-guard\lib\index.js E:\Code\dsh_home\plugins\dsh-pii-guard\lib\index.js -Force
+```

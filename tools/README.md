@@ -76,22 +76,25 @@ mock LLM 会像真实模型一样在回复中原样引用占位符, 因此能验
 
 ### 真实 DSH 接入时的日志
 
-引擎级日志 `hook_log.jsonl` 由 `presidio_pii.hooks` 自动记录, 无需额外接线:
+引擎级日志 `hook_log.jsonl` 由 `presidio_pii.hooks` 自动记录, 无需额外接线。
+该日志**只存元数据, 不含原文/脱敏文本/还原文本**:
 
 | 字段 | 说明 |
 |------|------|
 | `event` | `before_llm` / `after_llm` |
-| `conversation_id` / `session_id` | 会话标识与派生的存储会话 |
-| `doc_id` | 轮次/文档标识 |
-| `raw` | 原始内容 (发送前 prompt / LLM 返回) |
-| `transformed` | 转换后内容 (脱敏文本 / 还原文本) |
+| `conv_sha1` / `session_id` | 会话指纹 (SHA1 前 12 位) 与派生的存储会话 |
+| `doc_sha1` | 轮次/文档标识的指纹 (文件名可能含 PII, 故只存哈希) |
 | `n_replaced` / `n_restored` / `n_unrestored` | 数量统计 |
-| `entities` | 实体类型分布 (仅 before_llm) |
+| `entities` | 实体类型分布 (不含实体文本) |
+| `redacted_sha256` / `response_sha256` | 内容指纹 (SHA256 前 16 位, 不可还原原文) |
+| `chars` | 字符数 |
 
-环境变量: `PII_DSH_DB_PATH` / `PII_DSH_LOG_PATH` (设为 `0` 关闭日志)。
+环境变量: `PII_DSH_DB_PATH` / `PII_DSH_LOG_PATH` (设为 `0` 关闭日志) /
+`PII_DSH_LOG_MAX_BYTES` (轮转上限, 默认 10 MB; `0` 不限额)。
 
-**隐私警告**: 两类日志都含 PII 明文, 全部落盘本地 `.pii_presidio_store/`
-(已 gitignore), 勿提交仓库或同步到外部。
+**隐私说明**: `hook_log.jsonl` 不含明文; 原文仅存在于映射库
+`.pii_presidio_store/sessions.db` (已 gitignore)。下方 `dsh_sim` 的
+`sim_*.jsonl` 是开发调试日志, 仍会写明文, 仅限本地使用, 不得用于生产环境。
 
 ## 3. 单元/回归测试
 
@@ -173,4 +176,30 @@ python tools/verify_check.py --files testdata_v2/resume/resume-01.docx \
 **为什么不用 `standalone_check.py`**: 原版用 `tempfile.mkdtemp()` 建临时目录,
 在 DSH 沙箱内 python 子进程自建目录后写 docx 会被拒 (`PermissionError`);
 本版要求目录预先创建, python 只写文件, 沙箱内可用。
+
+## 8. 发布门禁 — `release_gate.py`
+
+对应 `docs/RELEASE-GATE.md` 的 12 项判据, 逐项输出 `PASS/FAIL/SKIP/MANUAL` 与证据摘要。
+
+```bash
+python tools/release_gate.py                                  # 全部
+python tools/release_gate.py --only 5,9,10                    # 指定项
+python tools/release_gate.py --json "$TEMP/release_gate.json" # 证据落盘
+```
+
+退出码: `0` 全 PASS / `1` 有 FAIL / `2` 无 FAIL 但仍有 SKIP 或 MANUAL。
+SKIP（离线、缺工具、待决策）与 MANUAL（需人工重启 DSH）都不算通过。
+
+## 9. 外部语料网络回归 — `external_corpus_check.py`
+
+只用**网络下载**的公开样例做 redact→restore 无损回归, 不用本地语料、不打印正文:
+
+```bash
+python tools/external_corpus_check.py            # 下载到临时目录并校验
+python tools/external_corpus_check.py --refresh  # 强制重新下载
+python tools/external_corpus_check.py --json out.json
+```
+
+判据: 注入合成 PII 后 `n_replaced > 0`、逐字还原、残留占位符 0、无泄漏。
+退出码: `0` 全通过 / `1` 失败 / `3` 离线(不做本地语料替代)。门禁 #12 调用本工具。
 

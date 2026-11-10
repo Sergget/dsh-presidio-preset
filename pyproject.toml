@@ -1,3 +1,8 @@
+[build-system]
+# 构建后端锁定到已验证版本：跨时间构建哈希才可复现（升级需重建并更新 release 清单）
+requires = ["setuptools==84.2.1", "wheel==0.48.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "presidio-pii-dsh"
 version = "0.1.0"
@@ -20,3 +25,9 @@ segment = [
 
 [project.scripts]
 presidio-pii = "presidio_pii.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["presidio_pii*"]
+
+[tool.setuptools.package-data]
+presidio_pii = ["assets/*.txt"]

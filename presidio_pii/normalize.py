@@ -70,19 +70,21 @@ def normalize(text: str) -> Tuple[str, List[int], List[Tuple[int, int]]]:
             continue
 
         if folded in _SEP_CHARS:
-            # 分隔符: 只有夹在两个数字之间时才吞噬 ("138 0013 8000")
+            # 分隔符: 夹在两个数字之间且**只有一个字符**时才吞噬
+            # ("138 0013 8000" / "11010119900307\n7890")。
+            # 连续多个空白是表格列对齐, 吞掉会把几列数字拼成伪卡号
+            # (Get-Process 输出 "200      12    40960  20480     1.25" 曾被判成 BANK_CARD)。
             prev_digit = bool(chars) and chars[-1].isdigit()
-            j = i
-            while j < n and _nfkc_char(text[j]) in _SEP_CHARS:
-                j += 1
+            j = i + 1
+            next_is_sep = j < n and _nfkc_char(text[j]) in _SEP_CHARS
             next_digit = j < n and _nfkc_char(text[j]).isdigit()
-            if prev_digit and next_digit:
+            if prev_digit and next_digit and not next_is_sep:
                 if spans:
                     s, _e = spans[-1]
                     spans[-1] = (s, j)
                 i = j
                 continue
-            # 不是数字之间的分隔符: 保留为普通空格
+            # 不是可吞噬的数字间分隔符: 保留为普通空格
             chars.append(" ")
             origin.append(i)
             spans.append((i, i + 1))

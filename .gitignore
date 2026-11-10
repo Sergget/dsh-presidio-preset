@@ -9,6 +9,8 @@ __pycache__/
 *.session.json
 *.session.csv
 *.mapping.csv
+# dsh_sim 调试日志 (含 PII 明文, 仅限本地; 默认在 .pii_presidio_store/ 下, 这里兜底 --log-out 自定义路径)
+sim_*.jsonl
 *-redacted/
 *-restored/
 # 合成测试语料 (由 tools/gen_test_corpus.py 生成, 含基础文档内容)

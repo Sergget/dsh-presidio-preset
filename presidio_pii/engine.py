@@ -21,6 +21,9 @@ from .normalize import NormalizedText
 
 PH_OPEN, PH_CLOSE = "⟦", "⟧"
 _PH_RE = re.compile(r"⟦PII:[A-Z_]+:\d+⟧")
+# UUID: 数字类识别器在它内部只会切走一段, 必须整体跳过而不是局部替换
+_RE_UUID = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 
 def count_placeholders(text: str) -> int:
@@ -152,7 +155,44 @@ class PresidioPIIEngine:
                 mapped.append(RecognizerResult(start, end, r.entity_type, r.score))
             results = mapped
         # 去重 & 冲突处理 (使用含自定义优先级的表)
+        results = self._trim_spans(text, results)
+        results = self._drop_uuid_spans(text, results)
         return self._resolve_overlaps(results, self._prio)
+
+    @staticmethod
+    def _trim_spans(text: str, results: List[RecognizerResult]) -> List[RecognizerResult]:
+        """剥离实体区间首尾的空白/换行。
+
+        某些识别器 (如人名三字窗口、jieba 词性标注) 会把尾随空格/制表符/换行
+        并进实体, 直接替换会吞掉原文的分隔符, 破坏分行、缩进与表格对齐。
+        只裁首尾, 实体内部的空格 ("张 伟") 保持不变。
+        """
+        out = []
+        for r in results:
+            start, end = r.start, r.end
+            while start < end and text[start].isspace():
+                start += 1
+            while end > start and text[end - 1].isspace():
+                end -= 1
+            if end <= start:
+                continue
+            out.append(r if (start, end) == (r.start, r.end)
+                       else RecognizerResult(start, end, r.entity_type, r.score))
+        return out
+
+    @staticmethod
+    def _drop_uuid_spans(text: str, results: List[RecognizerResult]) -> List[RecognizerResult]:
+        """丢弃落在 UUID 内部的实体: UUID 要么整体脱敏, 要么整体保留。
+
+        数字类识别器无法把 UUID 整体识别成一个实体, 局部替换会既泄露前段
+        又把 ID 弄坏, 因此统一跳过 (与 git hash 的边界规则互补)。
+        """
+        spans = [m.span() for m in _RE_UUID.finditer(text)]
+        if not spans:
+            return results
+        return [r for r in results
+                if not any(r.start < sp_end and r.end > sp_start
+                           for sp_start, sp_end in spans)]
 
     @staticmethod
     def _resolve_overlaps(results: List[RecognizerResult],

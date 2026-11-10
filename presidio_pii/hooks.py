@@ -4,11 +4,13 @@
   - session_id 由 conversation_id 派生 (稳定哈希), 同一会话多轮共享还原映射表;
     未传入时按日期派生, 同一天内共享。
   - before_llm 返回脱敏文本; after_llm 用同一 session_id 还原占位符。
-  - 每次调用均写入结构化 JSONL 日志 (记录发出/接收的原始与转换后内容)。
+  - 每次调用均写入结构化 JSONL 日志, 只记元数据 (实体类型/数量、内容指纹哈希),
+    **不记录原文或还原后文本**; 旧字段 raw/transformed 已移除。
 
 环境变量:
   PII_DSH_DB_PATH    覆盖映射库路径
   PII_DSH_LOG_PATH   覆盖日志路径 (设为 "0" 关闭日志)
+  PII_DSH_LOG_MAX_BYTES  日志轮转上限 (字节, 默认 10 MB; 0 表示不限额)
   PII_DSH_WHITELIST  白名单文件路径 (每行一个关键词, 命中的区域不脱敏)
   PII_DSH_CUSTOM_RULES  自定义规则文件 (分号分隔多个, .json=正则模板, .py=代码规则)
   PII_DSH_RULES_RELOAD  规则热更新检查间隔 (秒, 默认 1; 0/off 关闭自动检查)
@@ -29,7 +31,7 @@ from pathlib import Path
 from typing import Tuple
 
 from .engine import PresidioPIIEngine
-from .journal import JsonlJournal
+from .journal import DEFAULT_MAX_BYTES, JsonlJournal
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_DB = _REPO_ROOT / ".pii_presidio_store" / "sessions.db"
@@ -158,8 +160,21 @@ def get_journal() -> JsonlJournal | None:
     global _JOURNAL
     if _JOURNAL is None:
         raw = os.environ.get("PII_DSH_LOG_PATH", str(_DEFAULT_LOG))
-        _JOURNAL = None if raw == "0" else JsonlJournal(raw)
+        _JOURNAL = None if raw == "0" else JsonlJournal(raw, max_bytes=_log_max_bytes())
     return _JOURNAL
+
+
+def _log_max_bytes() -> int:
+    """日志轮转上限: 环境变量 PII_DSH_LOG_MAX_BYTES, 默认 10 MB, 0=不限额。"""
+    raw = (os.environ.get("PII_DSH_LOG_MAX_BYTES") or "").strip()
+    if not raw:
+        return DEFAULT_MAX_BYTES
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        print(f"[pii] 无法解析日志上限 {raw!r}, 使用默认 {DEFAULT_MAX_BYTES}",
+              file=sys.stderr)
+        return DEFAULT_MAX_BYTES
 
 
 def reset_singleton() -> None:
@@ -184,6 +199,18 @@ def _entity_counts(placeholders: dict) -> dict:
     return counts
 
 
+def _fingerprint(text: str) -> str:
+    """内容指纹: 单向 SHA256 前 16 位, 不足以还原原文。"""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _id_fingerprint(value: str | None) -> str | None:
+    """会话/文档标识指纹; 文件名、会话号可能含 PII, 日志只留哈希。"""
+    if not value:
+        return None
+    return hashlib.sha1(value.encode("utf-8")).hexdigest()[:12]
+
+
 def before_llm(prompt: str, conversation_id: str | None = None,
                doc_id: str = "prompt") -> str:
     """发送给 LLM 之前调用: 脱敏并登记映射。返回脱敏后的文本。"""
@@ -192,11 +219,14 @@ def before_llm(prompt: str, conversation_id: str | None = None,
     rd = engine.redact(prompt, sid, doc_id)
     journal = get_journal()
     if journal:
-        journal.record("before_llm", conversation_id=conversation_id,
-                       session_id=sid, doc_id=doc_id,
-                       raw=prompt, transformed=rd.text,
+        journal.record("before_llm",
+                       conv_sha1=_id_fingerprint(conversation_id),
+                       session_id=sid,
+                       doc_sha1=_id_fingerprint(doc_id),
                        n_replaced=rd.n_replaced,
-                       entities=_entity_counts(rd.restored))
+                       entities=rd.entity_counts,
+                       redacted_sha256=_fingerprint(rd.text),
+                       chars=len(prompt))
     return rd.text
 
 
@@ -212,7 +242,13 @@ def after_llm(response: str, conversation_id: str | None = None,
     stats = {"n_restored": len(rs.restored), "n_unrestored": len(rs.unrestored)}
     journal = get_journal()
     if journal:
-        journal.record("after_llm", conversation_id=conversation_id,
-                       session_id=sid, doc_id=doc_id,
-                       raw=response, transformed=rs.text, **stats)
+        journal.record("after_llm",
+                       conv_sha1=_id_fingerprint(conversation_id),
+                       session_id=sid,
+                       doc_sha1=_id_fingerprint(doc_id),
+                       n_restored=stats["n_restored"],
+                       n_unrestored=stats["n_unrestored"],
+                       entities=_entity_counts(rs.restored),
+                       response_sha256=_fingerprint(response),
+                       chars=len(response))
     return rs.text, stats

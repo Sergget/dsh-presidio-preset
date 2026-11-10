@@ -4,6 +4,7 @@
 全角字符、数字插值、换行截断、旧版证件、新增实体类型。
 每组用例标明「必命中」或「必不命中」, 防止精度与召回互相回退。
 """
+import re
 import sys
 from pathlib import Path
 
@@ -140,3 +141,47 @@ def test_normalize_noop():
     nt = NormalizedText("张伟的身份证")
     assert not nt.changed
     assert nt.text == "张伟的身份证"
+
+
+# --------------------------------------------------------------------------- #
+# 结构保持: 替换不得吞掉分隔符 (空格/Tab/换行)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("text", [
+    "张伟 phone=13800138000",
+    "张伟\nphone=13800138000",
+    "张伟\tdept=研发",
+    "user: 张伟\nphone: 13800138000",
+    "姓名\t手机\n张伟\t13800138000",
+])
+def test_redaction_preserves_whitespace_layout(engine, text):
+    """脱敏前后空白序列必须一致, 且可逐字还原。"""
+    rd = engine.redact(text, "layout", "t")
+    assert rd.n_replaced >= 1, text
+    assert re.findall(r"\s+", rd.text) == re.findall(r"\s+", text), rd.text
+    assert engine.restore(rd.text, "layout", "t").text == text
+
+
+# --------------------------------------------------------------------------- #
+# 数字类误报: 时间戳 / UUID / 常用词标题
+# --------------------------------------------------------------------------- #
+def test_epoch_millis_not_bank_card(engine):
+    for ts in ("1699289554123", "1762400000000"):
+        assert _types(engine, f"epoch={ts}") == {}, ts
+
+
+def test_uuid_not_partially_redacted(engine):
+    uid = "550e8400-e29b-41d4-a716-446655440000"
+    assert _types(engine, f"id={uid}") == {}
+    assert engine.redact(f"id={uid}", "uuid", "t").text == f"id={uid}"
+
+
+def test_legacy_13_digit_card_still_detected(engine):
+    """13 位旧卡 (Luhn 通过) 仍需识别, 不能一刀切掉。"""
+    hits = _types(engine, "old card 4222222222222")
+    assert list(hits.values()).count("BANK_CARD") == 1, hits
+
+
+def test_heading_common_word_not_person(engine):
+    """标题里的常用词 + 尾随空白不得被当成姓名。"""
+    hits = _types(engine, "## 2 方法\n本文采用姓名字典")
+    assert "PERSON" not in hits.values(), hits

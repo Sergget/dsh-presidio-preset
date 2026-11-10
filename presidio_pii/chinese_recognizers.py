@@ -58,8 +58,12 @@ _RE_LANDLINE = r"(?<!\d)0\d{2,3}[-\s]?\d{7,8}(?!\d)"
 _RE_EMAIL = r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"
 # 统一社会信用代码 (GB 32100-2015 字符集: 排除 I/O/S/V/Z, 首位为 1/5/9/Y)
 _RE_CREDIT = r"(?<![0-9A-Z])[159Y][0-9A-HJ-NPQRTUWXY]\d{6}[0-9A-HJ-NPQRTUWXY]{10}(?![0-9A-Z])"
-# 银行卡 (13-19 位数字); 由 Luhn 校验兜底, 避免长数字串一律判成卡号
-_RE_BANK = r"(?<![\d\-])\d(?:[ -]?\d){12,18}(?![\d\-])"
+# 银行卡 (13-19 位数字); 由 Luhn 校验兜底, 避免长数字串一律判成卡号。
+# 边界排除字母/下划线/连字符: 防止在 UUID、hex 串、git hash 内部只切走一段数字
+# ("550e8400-…-a716-446655440000" 曾把 "716-446655440000" 判成卡号)。
+_RE_BANK = r"(?<![0-9A-Za-z_\-])\d(?:[ -]?\d){12,18}(?![0-9A-Za-z_\-])"
+# 13 位毫秒时间戳区间 (2001-09-09 ~ 2100-01-01), 不是卡号
+_EPOCH_MS = (1_000_000_000_000, 4_102_444_800_000)
 # 护照 / 港澳通行证: 字母前缀 + 8 位数字 (E=电子护照, G/M=旧版, C/H=港澳)
 _RE_PASSPORT = r"(?<![0-9A-Za-z])[EGMDCHS][A-Z0-9]?\d{8}(?![0-9A-Za-z])"
 # 中国大陆车牌: 省份简称 + 发牌机关字母 + 5 位序号 (含新能源)
@@ -354,6 +358,12 @@ class BankCardRecognizer(LightRecognizer):
         for m in re.finditer(_RE_BANK, text):
             raw = m.group()
             digits = re.sub(r"[ \-]", "", raw)
+            # 13 位毫秒时间戳 (epoch ms) 不是卡号; 13-15 位的旧卡须过 Luhn,
+            # 否则日志里的订单号/时间戳会被一律误脱敏。16 位以上仍保持降级保留。
+            if len(digits) == 13 and _EPOCH_MS[0] <= int(digits) <= _EPOCH_MS[1]:
+                continue
+            if len(digits) < 16 and not _luhn(digits):
+                continue
             score = 0.80 if _luhn(digits) else 0.45
             out.append(RecognizerResult(m.start(), m.end(), self.entity_type, score))
         return out
@@ -431,6 +441,13 @@ class ChinesePersonRecognizer(LightRecognizer):
         tokens = segmentation.pos_tokens(text)
         if tokens is not None:
             for word, s, e, flag in tokens:
+                # jieba 偶尔把前导/尾随空白并进词里: 裁掉空白并同步收窄区间,
+                # 而不是整词丢弃 (丢弃会漏掉紧贴行尾/制表符的真实姓名)
+                lead = len(word) - len(word.lstrip())
+                trail = len(word) - len(word.rstrip())
+                if lead or trail:
+                    word = word.strip()
+                    s, e = s + lead, e - trail
                 if flag != "nr" or not 2 <= len(word) <= 3:
                     continue
                 if word[0] not in SURNAMES:
@@ -457,7 +474,11 @@ class ChinesePersonRecognizer(LightRecognizer):
             for length in (3, 2):
                 if i + length > n:
                     continue
-                name = text[i:i + length]
+                name = text[i:i + length].rstrip()
+                # 姓名区间不得包含尾随空白: "张伟 phone" 的 3 字窗口是 "张伟 ",
+                # 若把它当姓名会把分隔空格一起替换掉, 破坏原文分行/缩进/制表符。
+                if not name or name[0].isspace():
+                    continue
                 # 姓名内部的空格/全角空格 ("张 伟") 允许, 但需保留原文区间
                 if " " in name or "　" in name:
                     compact = name.replace(" ", "").replace("　", "")
@@ -472,7 +493,7 @@ class ChinesePersonRecognizer(LightRecognizer):
                     continue
                 if probe in _PERSON_STOPWORDS:
                     continue
-                end = i + length
+                end = i + len(name)
                 if (i, end) in covered:
                     break
                 if not _left_context_ok(text, i):
@@ -480,8 +501,11 @@ class ChinesePersonRecognizer(LightRecognizer):
                 if bounds is not None:
                     if i not in bounds or end not in bounds:
                         # 分词器可能把 "法定代表人马晓东" 切成 "人马/晓东",
-                        # 此时靠称谓字 + 右标点兜底
-                        if not _strong_context(text, i, end):
+                        # 此时靠称谓字 + 右标点兜底; 若右边界紧邻空白,
+                        # 分词器常把空白并进了词, 该位置不在 boundary 集合,
+                        # 但姓名不可能跨越空白, 视为合法右边界
+                        if not (end < n and text[end].isspace()) \
+                                and not _strong_context(text, i, end):
                             continue
                     if segmentation.is_common_word(name):
                         continue

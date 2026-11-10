@@ -39,9 +39,52 @@ def test_hooks_before_after_logging(hook_env):
     recs = [json.loads(l) for l in
             (hook_env / "hook_log.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [r["event"] for r in recs] == ["before_llm", "after_llm"]
-    assert recs[0]["raw"] == text and recs[0]["transformed"] == red
-    assert recs[1]["raw"].startswith("结果:") and recs[1]["n_restored"] >= 1
-    assert recs[0]["entities"]  # 实体类型统计非空
+    assert recs[0]["n_replaced"] >= 2 and recs[0]["entities"]
+    assert recs[1]["n_restored"] >= 1
+    assert recs[0]["redacted_sha256"] and len(recs[0]["redacted_sha256"]) == 16
+    assert recs[0]["doc_sha1"] and recs[0]["conv_sha1"]
+    # 日志只留元数据: 原文、脱敏文本、还原后文本、明文标识都不落盘
+    log_text = (hook_env / "hook_log.jsonl").read_text(encoding="utf-8")
+    for rec in recs:
+        assert "raw" not in rec and "transformed" not in rec
+        assert "doc_id" not in rec and "conversation_id" not in rec
+    for leaked in (text, "张伟", "110101199003077890", red, restored, "⟦PII:", "结果:"):
+        assert leaked not in log_text
+
+
+@pytest.mark.parametrize("text,secrets", [
+    ("张伟的身份证是110101199003077890", ("张伟", "110101199003077890")),
+    ("李明的手机号是13800138000", ("李明", "13800138000")),
+    ("王芳的邮箱 wangfang@example.com", ("王芳", "wangfang@example.com")),
+    ("卡号 6222021234567890123", ("6222021234567890123",)),
+])
+def test_hook_log_never_contains_entity_text(hook_env, text, secrets):
+    """回归: 日志（含会话名/文档名）不得出现任何原始实体文本。"""
+    conv = "conv-张伟-13800138000"
+    red = hooks.before_llm(text, conversation_id=conv, doc_id="张伟.docx")
+    hooks.after_llm(f"结果:{red}", conversation_id=conv, doc_id="张伟.docx")
+
+    log_text = (hook_env / "hook_log.jsonl").read_text(encoding="utf-8")
+    for leaked in (*secrets, conv, "张伟.docx"):
+        assert leaked not in log_text
+    for rec in (json.loads(l) for l in log_text.splitlines()):
+        assert "raw" not in rec and "transformed" not in rec
+        assert set(rec) <= {"ts", "iso", "event", "conv_sha1", "session_id",
+                            "doc_sha1", "n_replaced", "n_restored",
+                            "n_unrestored", "entities", "redacted_sha256",
+                            "response_sha256", "chars"}
+
+
+def test_journal_rotates_at_size_limit(tmp_path):
+    from presidio_pii.journal import JsonlJournal
+
+    journal = JsonlJournal(tmp_path / "j.jsonl", max_bytes=300)
+    for i in range(40):
+        journal.record("probe", seq=i, pad="x" * 40)
+    assert (tmp_path / "j.jsonl.1").exists()
+    size = (tmp_path / "j.jsonl").stat().st_size
+    assert size <= 300 + 200          # 允许超出一条记录
+    assert 0 < len(journal.read_all()) < 40
 
 
 def test_hook_session_isolation_via_conversation_id(hook_env):

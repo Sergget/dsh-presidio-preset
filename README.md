@@ -127,3 +127,22 @@ See [tools/README.md](tools/README.md) for details.
     cordis preset, compatible with dsh 0.2.x. It enforces a redact-first workflow
     (CLI redaction before any prompt/tool I/O, lossless restore after), verified
     against dsh 0.2.1-rc.5.
+- **`plugins/dsh-pii-guard/lib/index.js`**: DSH `tools/post-execute` interception plugin
+  (read/grep/pwsh/job_output/job_list). The installed copy lives at
+  `E:/Code/dsh_home/plugins/dsh-pii-guard/lib/index.js` and must stay byte-identical
+  (enforced by gate #5); restart DSH fully after changing it.
+
+## Release & gates
+
+```powershell
+# One-shot release gate (per-check PASS/FAIL/SKIP/MANUAL, evidence saved with --json)
+& "D:\Python\313\python.exe" tools\release_gate.py --json "$env:TEMP\release_gate.json"
+```
+
+Criteria and outstanding items: [docs/RELEASE-GATE.md](docs/RELEASE-GATE.md).
+Release/rollback steps: [docs/RELEASE-RUNBOOK.md](docs/RELEASE-RUNBOOK.md).
+Plugin sync:
+
+```powershell
+Copy-Item plugins\dsh-pii-guard\lib\index.js E:\Code\dsh_home\plugins\dsh-pii-guard\lib\index.js -Force
+```

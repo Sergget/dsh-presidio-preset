@@ -1,0 +1,36 @@
+{
+  "schema": "pii-guard-release-manifest/v1",
+  "package": "presidio-pii-dsh",
+  "version": "0.1.0",
+  "recorded_at": "2026-11-10",
+  "artifact": {
+    "filename": "presidio_pii_dsh-0.1.0-py3-none-any.whl",
+    "path": "dist/presidio_pii_dsh-0.1.0-py3-none-any.whl",
+    "bytes": 58831,
+    "sha256": "771549096CB6C2A07F2466544A9DDBF37CEB1C3D5CDD4D85F971CB4D15620CF8"
+  },
+  "build": {
+    "command": "python -m pip wheel <clean-src> --no-deps -w dist --disable-pip-version-check",
+    "source_date_epoch": "1700000000",
+    "backend": {
+      "setuptools": "84.2.1",
+      "wheel": "0.48.0",
+      "pinned": true
+    },
+    "reproducible": true
+  },
+  "source": {
+    "commit": "ea22be400a169798c37da6f44c7a59f4119cccf6",
+    "commit_short": "ea22be4",
+    "origin_master": "7188dba",
+    "ahead_of_origin": 14,
+    "working_tree_dirty": true,
+    "source_tree_sha256": "3ea91d9cba1684203ce496486e5acb7d0e03e57ce11a7485e14c76c3825e3118",
+    "provenance_mode": "artifact-only",
+    "note": "按用户决定不提交、不推送；发布以本清单记录的 wheel 哈希为准"
+  },
+  "verification": {
+    "command": "python tools/release_gate.py --only 10",
+    "criterion": "wheel 字节哈希 + 源码树摘要 + HEAD 三者一致"
+  }
+}

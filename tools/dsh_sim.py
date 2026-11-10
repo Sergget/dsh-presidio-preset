@@ -92,6 +92,8 @@ def main(argv: list | None = None) -> int:
                 _REPO_ROOT / ".pii_presidio_store" / f"sim_{args.conversation_id}.jsonl")
     journal = JsonlJournal(log_path)
 
+    print("[警告] dsh_sim 会写入含 PII 明文的调试日志 (sim_*.jsonl), 仅限本地使用, 勿提交或外传",
+          file=sys.stderr)
     print(f"conversation_id={args.conversation_id}  日志: {log_path}\n")
     results = []
     for i, text in enumerate(args.turns, 1):

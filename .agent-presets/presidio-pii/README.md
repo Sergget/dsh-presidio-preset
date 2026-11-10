@@ -51,16 +51,19 @@ python -m presidio_pii.cli restore <脱敏文件>  ← 无损还原
    pip install -e ".[segment]"   # 可选：jieba 分词，人名/地名精度显著提升
    ```
 2. 用 bundle 安装 preset（本目录 `bundle/` 下双件套：`package.json` + `cordis.patch.yml`，
-   plugins 逐字取自 `agent.cordis.yml`）：
+   plugins 对齐 **当前 dsh 版本**的 `preset-standard` 权威定义）：
    - **方式 A（推荐）**：在 dsh 会话内用 `plugin_manager` 工具，
      `action: install_bundle`，`target` 指向本 `bundle/` 目录绝对路径。
-   - **方式 B**：把 `bundle/cordis.patch.yml` 的内容追加到 patch 层：
-     - GUI 用的 **desktop profile**：`$DSH_HOME/profiles/desktop/cordis.patch.yml`
-     - 其它 profile / 全局：`$DSH_HOME/cordis.patch.yml`（home 层）
-3. **验证（需先重启 DSH）**：
-   - 组合层：`dsh --profile web --dump-config` 输出应含 `preset-presidio-pii`
-     与「PII 防护模式」（desktop profile 由 Electron 独占管理，CLI 不能 dump）。
-   - GUI：重启后新建会话，Agent Preset 选择器应出现「PII 防护模式」。
+   - **方式 B**：把 `bundle/cordis.patch.yml` 的内容追加到 **home 层**
+     `$DSH_HOME/cordis.patch.yml`（对所有 profile 生效）。
+     **不要在 profile 层再插一份**：home 层 + profile 层同时 `insert` 同 id 行会触发
+     `Duplicate agent preset`，同样表现为「加载失败」。本机当前唯一权威声明就在 home 层。
+ 3. **验证（需先重启 DSH）**：
+   - 清单漂移：`node tools/verify_preset_plugins.mjs`（仓库根目录）逐项校验 preset 的
+     每条子插件在**当前 dsh 版本**可 `require.resolve`，防止 dsh 升级后旧子路径残留。
+   - 组合层：`dsh --profile web --dump-config` 输出应**恰好一行** `preset-presidio-pii`，
+     且不含 `tool-subagent-list-agents` / `modelSelectionSettings`（0.2.2-rc.1 起已移除/改名）。
+   - GUI：重启后新建会话，Agent Preset 选择器应出现「PII 防护模式」且**不带「加载失败」徽标**。
 4. `$DSH_HOME/.agent-presets/presidio-pii/` 旧目录可删——官方迁移指引明确
    「Install it, verify the row, then delete the legacy directory」。仓库内保留本目录作为权威源。
 
@@ -69,8 +72,13 @@ python -m presidio_pii.cli restore <脱敏文件>  ← 无损还原
 > 零命中（它是 profile 声明字段，不是代码字符串）。改完 patch 必须重启 Electron 应用，
 > 只刷新浏览器无效。
 
-已在 dsh 0.2.1-rc.5 上实测：home 层追加后 `dsh --profile web --dump-config` exit 0，
-`preset-presidio-pii` 完整呈现（17 个插件行 + persona）。
+已在 dsh 0.2.2-rc.1 上实测（2026-11-10 修复「加载失败」后）：
+`node tools/verify_preset_plugins.mjs` 全绿；`dsh --profile web --dump-config` exit 0、
+`preset-presidio-pii` 恰好一行（23 个插件行 + persona）。
+0.2.1-rc.5 -> 0.2.2-rc.1 升级时 `@deepseek-ai/dsh-tool-subagent-control/list-agents`
+子路径导出被删除（功能并入主包），旧清单残留会让 registry 激活时子插件导入失败，
+preset 被标记 `broken`，GUI 显示「加载失败」；`modelSelectionSettings` 同期改为
+`modelSelection` / `modelDiscovery`。升级 dsh 后必须重跑上述校验。
 
 ### 配置
 
