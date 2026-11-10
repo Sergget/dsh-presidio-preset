@@ -8,7 +8,7 @@
 | 项 | 值 |
 |---|---|
 | 包名 / 版本 | `presidio-pii-dsh` / `0.1.0` |
-| 提交 | `HEAD ea22be4`（未推送）；`origin/master = 7188dbaa`；`master` ahead **14** |
+| 提交 | `HEAD 69021c9`（已推送，2026-11-10）；`origin/master = 69021c9`；ahead **0** |
 | 构建产物 | `presidio_pii_dsh-0.1.0-py3-none-any.whl`，57,350 B |
 | 可复现哈希 | SHA256 `75050E227825CF06C5C7146D2A484F103EFA9D2DB954957FABDF3D7E66B0361A`（`SOURCE_DATE_EPOCH=1700000000`） |
 | 一键门禁 | `python tools/release_gate.py`（`--json` 落盘逐项结果） |
@@ -166,8 +166,8 @@ Get-ChildItem dist\*.whl | ForEach-Object {
 
 1. ~~restore 自动接线~~ → 已拍板**方案 B**（2026-11-10）：`agent/assistant-stream` 显示侧还原 + `PII_GUARD_DISPLAY=full/mask/off` 三档设置；门禁 #4 已转 PASS（`tools/release_gate.py --only 4`），冒烟 `tests/js/plugin_display.mjs` 6 条。C 方案（llm/stream）明确排除——违背"PII 不进模型上下文"不变量。
 2. shell 已拍板 P1-全 + P2 + isError（pwsh 前台 + `job_output`/`job_list` + 错误文本，2026-11-06/07 实现，含 256 KB 截断）；剩余待定：base64/UTF-16/图片内文字、bash 同构。
-3. 溯源已选 B（产物级清单，2026-11-07 实现，门禁 #10 PASS）；是否再推送远端以升级为 A 仍待定。
-4. 是否把本次修复提交并打 tag（当前仍是工作树改动；用户已明确暂不提交）。
+3. ~~溯源已选 B~~ → 2026-11-10 已提交推送，升级为 A（origin 含 HEAD），门禁 #10 仍 PASS。
+4. ~~是否提交~~ → 已提交推送（`feb0e55` + `69021c9`）；打 tag 仍待定。
 5. ~~是否锁定构建后端版本~~ → 已锁定 `setuptools==84.2.1` / `wheel==0.48.0`（2026-11-07，门禁 #9 复核）；跨 OS 复现仍未验证。
 6. `hook_log.jsonl` 的保留期限与访问控制（明文问题已于 2026-11-06 修复：只存元数据，不再写原文）。
 7. 已知检测缺口是否接受为残余风险：base64/UTF-16/图片内文字、bash 同构（见 [DECISION-shell-redaction.md](DECISION-shell-redaction.md) §3）。

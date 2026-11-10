@@ -20,7 +20,7 @@
 | 7 | 密钥扫描（工作树 + 历史） | PASS |
 | 8 | 单元测试套件 | PASS |
 | 9 | 可复现安装（wheel + 干净环境） | PASS |
-| 10 | 源码可溯源（origin 含 HEAD / 产物清单） | PASS（B：产物级溯源；origin 仍未推送） |
+| 10 | 源码可溯源（origin 含 HEAD / 产物清单） | PASS（A：origin 已含 HEAD，2026-11-10 推送） |
 | 11 | 仓库不落真实 PII / 映射库 | PASS |
 | 12 | 外部语料（网络下载）回归 | PASS（离线时 SKIP） |
 
@@ -144,7 +144,7 @@
 ## 10. 源码可溯源（origin 是否含 HEAD）
 
 - [x] **判定标准**：发布包对应的提交在远端可达（`origin` 含 HEAD），**或**发布物改为已构建 wheel 并记录哈希。
-- **当前状态**：PASS（按路径 B：产物级溯源）。事实不变：`HEAD ea22be4`，`master` 比 `origin/master` **ahead 14**，`origin` 仍无该 ref。用户决定暂不提交、不推送，故以 wheel 清单作为出处。
+- **当前状态**：PASS（按路径 A：远端可达）。2026-11-10 已提交并推送，`origin/master` 含 HEAD（`69021c9`），ahead 0；清单仍保留 wheel 哈希与源码树摘要作为产物级佐证。
 - **证据**：`release/presidio-pii-dsh-0.1.0.json`
   - `artifact.sha256` = `75050E227825CF06C5C7146D2A484F103EFA9D2DB954957FABDF3D7E66B0361A`，bytes=57,350，与 `dist/` 中的 wheel 逐字节核对一致
   - `source.source_tree_sha256` = `f0446a21…7bec7`，由 `presidio_pii/**` + `pyproject.toml` 的路径/内容哈希排序后再哈希得到；门禁会按当前源码重算比对，源码一改即 FAIL，避免“清单绑定旧代码”

@@ -20,14 +20,14 @@
     "reproducible": true
   },
   "source": {
-    "commit": "feb0e55e995d69efee0da13d8d7df06f710471f6",
-    "commit_short": "feb0e55",
-    "origin_master": "7188dba",
-    "ahead_of_origin": 15,
+    "commit": "69021c90544643a346fe2a37f6f821e4ef0123ab",
+    "commit_short": "69021c9",
+    "origin_master": "69021c9",
+    "ahead_of_origin": 0,
     "working_tree_dirty": false,
     "source_tree_sha256": "3ea91d9cba1684203ce496486e5acb7d0e03e57ce11a7485e14c76c3825e3118",
-    "provenance_mode": "artifact-only",
-    "note": "按用户决定不提交、不推送；发布以本清单记录的 wheel 哈希为准"
+    "provenance_mode": "origin-reachable",
+    "note": "已推送 origin/master 含 HEAD；门禁 #10 按路径 A 判定"
   },
   "verification": {
     "command": "python tools/release_gate.py --only 10",
