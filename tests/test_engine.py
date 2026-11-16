@@ -118,6 +118,9 @@ def test_job_title():
     "原则上不允许",
     "成品软件采购",
     "政协委员履职管理",
+    # 名单型识别器新增后的精度闸门: 带「名单：」引导词 + 顿号链，
+    # 但内容是证件/信息类型泛称，不得被当成姓名链（agent.md:83）。
+    "名单：身份证、手机号、银行卡、人名等个人信息。",
 ])
 def test_common_words_are_not_pii(text):
     assert _all_entities(text) == {}, text

@@ -228,6 +228,37 @@ _PERSON_STOPWORDS = {
     "关系", "场景", "项目", "关键", "位置", "第三方", "第一篇", "第一批",
 }
 
+# --------------------------------------------------------------------------- #
+# 名单型人名上下文（ChineseRosterPersonRecognizer 用）
+#
+# 常规人名识别器靠「非人名字」黑名单 + jieba 词性过滤, 会把显式名单链里
+# 「邝也 / 陈敬之 / 杨同初 / 欧阳娜娜」这类罕见姓、3 字名、复姓整条漏掉。
+# 「名单引导词 + 冒号 + 顿号链」本身是强人名信号, 可在链内放宽用字过滤,
+# 但必须用「引导词 + ≥3 项 + 每项 2-4 纯汉字 + 首字为姓 + 非常用词/停用词」
+# 与「整行无负样本词」把误报压到零 —— 尤其不能碰 normal-01.md 的
+# 「身份证、手机号、银行卡、人名」这类带顿号却不是名单的句子。
+# --------------------------------------------------------------------------- #
+# 复姓内联常量（不新增 assets/*.txt，避免触发词表级回归约束）
+_COMPOUND_SURNAMES = (
+    "欧阳", "司马", "诸葛", "上官", "令狐", "慕容", "司徒", "端木",
+    "皇甫", "尉迟", "长孙", "宇文", "轩辕", "东方", "独孤", "南宫",
+    "夏侯", "百里", "呼延", "东郭", "南门", "左丘", "羊舌", "梁丘",
+    "万俟", "闻人",
+)
+# 名单引导词（长词在前，正则从左到右逐位置匹配）
+_RE_ROSTER_LEAD = re.compile(
+    r"(学号名单|花名册|名单|名册|参会人员|与会人员|人员|成员|学生|幼儿|同学|专家)"
+    r"[^\n:：]{0,24}[:：]"
+)
+# 尾部学号后缀「（26）」/「(26)」：只剥它，名字本体仍按原文坐标 emit
+_RE_ROSTER_TAIL_NUM = re.compile(r"[（(]\s*\d{1,3}\s*[)）]\s*$")
+# 整行出现任一词即不按名单上下文放宽（普通叙述 / 负样本句子）
+_ROSTER_NEGATIVE = (
+    "身份证", "手机号", "银行卡", "个人信息", "内容要求", "本项目",
+    "第一部", "第二部", "第三部", "万元", "成熟", "方面", "原则",
+    "数据", "单位", "部门", "用户", "第三方", "封面", "周期", "概况",
+)
+
 
 def _left_context_ok(text: str, start: int) -> bool:
     """左边界: 句首/空白/标点, 或 "由/和/给/是" 这类引导字之后。"""
@@ -519,6 +550,85 @@ class ChinesePersonRecognizer(LightRecognizer):
 
 
 # --------------------------------------------------------------------------- #
+# 名单型人名（ChineseRosterPersonRecognizer）
+#
+# 常规识别器靠「非人名字」黑名单 + jieba 词性过滤，会把显式名单链里的
+# 「邝也 / 陈敬之 / 杨同初 / 欧阳娜娜」整条漏掉（罕见姓、含虚词的 3 字名、
+# 复姓、带「（26）」学号后缀）。「名单引导词 + 冒号 + 顿号链」本身是强信号，
+# 链内只要求「2-4 纯汉字 + 首字为姓/复姓 + 非停用词」，不再套用字黑名单。
+#
+# 误报闸门：整行命中任一负样本词即整行不触发；≥3 项；每项必须是合法姓名形态。
+# 只 emit 名字本体（不含学号后缀/句末标点），保证 restore 无损。
+# --------------------------------------------------------------------------- #
+class ChineseRosterPersonRecognizer(LightRecognizer):
+    """显式名单链里的人名（罕见姓 / 含虚词 3 字名 / 复姓 / 带学号后缀）。"""
+
+    _SEP = "、,，"
+
+    def __init__(self):
+        super().__init__("PERSON", score=0.80)
+
+    @staticmethod
+    def _valid_item(item: str) -> bool:
+        if not (2 <= len(item) <= 4) or not all(_is_cjk(c) for c in item):
+            return False
+        if item in _PERSON_STOPWORDS:
+            return False
+        if item[:2] in _COMPOUND_SURNAMES:
+            return len(item) >= 3          # 复姓 + 至少 1 字名
+        return item[0] in _SURNAME_CHARS
+
+    def analyze(self, text: str) -> List[RecognizerResult]:
+        out: List[RecognizerResult] = []
+        pat_split = re.compile(r"([" + re.escape(self._SEP) + r"])")
+        for lead in _RE_ROSTER_LEAD.finditer(text):
+            start_line = lead.end()
+            end_line = text.find("\n", start_line)
+            if end_line < 0:
+                end_line = len(text)
+            body = text[start_line:end_line]
+            item_base = start_line
+            if not body.strip():
+                # 名单也可能写在「参会人员（28 人）：」的下一行
+                item_base = end_line + 1
+                end_line = text.find("\n", item_base)
+                if end_line < 0:
+                    end_line = len(text)
+                body = text[item_base:end_line]
+            # 负样本词覆盖「引导词 → 名单行末」整段，避免把带顿号的叙述句当名单
+            if any(neg in text[max(0, lead.start()):end_line]
+                   for neg in _ROSTER_NEGATIVE):
+                continue
+            parts = pat_split.split(body)
+            if len(parts) < 5:            # ≥3 项 → 至少 5 段（项,分隔,项,分隔,项）
+                continue
+            pos = item_base
+            items = []
+            ok = True
+            for part in parts:
+                if len(part) == 1 and part in self._SEP:
+                    pos += len(part)
+                    continue
+                if not part.strip():
+                    pos += len(part)
+                    continue
+                lead_ws = len(part) - len(part.lstrip())
+                core = part.strip().rstrip("。．.;；:： ")
+                core = _RE_ROSTER_TAIL_NUM.sub("", core).rstrip()
+                if not core or not self._valid_item(core):
+                    ok = False
+                    break
+                s = pos + lead_ws
+                items.append((s, s + len(core)))
+                pos += len(part)
+            if not ok or len(items) < 3:
+                continue
+            for s, e in items:
+                out.append(RecognizerResult(s, e, self.entity_type, self.score))
+        return out
+
+
+# --------------------------------------------------------------------------- #
 # 地名 (词表 + 省/市/县/区通名)
 # --------------------------------------------------------------------------- #
 # 行政区划通名后接这些字时, 说明是泛称/层级词 ("市级/区县/城镇") 而非具体地名
@@ -791,6 +901,7 @@ def get_chinese_recognizers():
         PlateRecognizer(),
         IpMacRecognizer(),
         ChinesePersonRecognizer(),
+        ChineseRosterPersonRecognizer(),
         ChineseLocationRecognizer(),
         ChineseOrganizationRecognizer(),
         ChineseJobTitleRecognizer(),

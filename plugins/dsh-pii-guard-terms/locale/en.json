@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "PII blocklist",
+    "description": "Add terms and phrases that the PII guard redacts before prompts leave the harness."
+  }
+}

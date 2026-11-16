@@ -6,8 +6,10 @@
 
 ## 特性
 
-- **多实体识别**：中文人名、身份证号（18 位含校验位、15 位旧版）、手机与座机号、邮箱、统一社会信用代码、银行卡（Luhn 校验；校验失败降级保留而非丢弃）、护照、车牌号、IP/MAC 地址、省/市/县级行政区（`LOCATION`）、组织机构（`ORGANIZATION`）以及职位（`JOB_TITLE`）。
+- **多实体识别**：中文人名、身份证号（18 位含校验位、15 位旧版）、手机与座机号、邮箱、统一社会信用代码、银行卡（Luhn 校验；校验失败降级保留而非丢弃）、护照、车牌号、IP/MAC 地址、省/市/县级行政区（`LOCATION`）、组织机构（`ORGANIZATION`）以及职位（`JOB_TITLE`）。另设名单型识别通道：显式名单链里的罕见姓、复姓、含「之/同/也」的三字名、带「（26）」学号后缀均覆盖，且不放松通用人名过滤。
+- **工具结果整体重渲染**：对带 `presentationMeta` 的工具（如新版 `read` 卡片），DSH 的 post-execute 守卫会替换 canonical `value`，由 `render()` 与 `presentationMeta()` 从脱敏后的值重新生成——模型上下文、session log 的 `meta`、GUI 卡片拿到的是同一份占位符，不再出现「正文已脱敏、卡片仍留原文」。
 - **自定义规则**：用 JSON 正则模板或 Python 代码规则扩展识别——CLI 的 `--rules FILE`、环境变量 `PII_DSH_CUSTOM_RULES`，或 DSH preset 的 `config.custom_rules_path`。详见[自定义规则](#自定义规则)。
+- **设置页里自己加屏蔽词**：安装 `plugins/dsh-pii-guard-terms` 后，DSH 设置页会多出「PII 屏蔽词」一页，直接输入词或短语即可，保存后 **1 秒内**生效（无需重启）。词条写入 `.pii_presidio_store/user_terms_rules.json`（`entity_type` 为 `USER_TERM`、按字面匹配），由 `config.custom_rules_path` 接线到引擎；写接口只接受本机同源请求（loopback + `Sec-Fetch-Site`/Origin 校验），上限 500 条、单条 200 字符。
 - **写法容错**：全角数字字母、数字内插值（`138 0013 8000`）、换行截断的证件号、带空格的姓名，识别前统一归一化，非标准写法同样能命中，且还原仍映射回原文。
 - **词边界过滤**：每个命中都必须落在词边界上，词内片段一律丢弃（`内容要求` 里的 `容要求`、`所有部门` 里的 `所有部`、`政协委员` 里的 `委员`）。装上可选的 jieba 分词后，候选还须与分词边界对齐并符合词性（人名 `nr`、地名 `ns`），几乎消除误报。
 - **可逆脱敏**：用抗碰撞的 Unicode 占位符替换敏感数据（如 `⟦PII:ID_NUMBER:0001⟧`）。

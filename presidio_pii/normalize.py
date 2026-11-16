@@ -42,6 +42,29 @@ def _nfkc_char(ch: str) -> str:
     return folded if len(folded) == 1 else ch
 
 
+# 已写完整的 11 位大陆手机号。归一化吞噬分隔符前用它卡一道:
+# "王五 15385322046\n2024 年汇总" 里, 号码后的换行若被吞, 号码会与下一行
+# 的数字粘成 "153853220462024", 手机号正则的 (?!\d) 右边界随即失效 → 裸漏。
+# 插值写法的中间片段 ("138" / "1380013" / 身份证的 "11010119900307") 都不是
+# 完整 11 位手机号, 不受影响, 仍照常拼接。
+_RE_COMPLETE_MOBILE = re.compile(r"1[3-9]\d{9}")
+
+
+def _trailing_is_complete_mobile(chars: List[str]) -> bool:
+    """当前归一化串末尾的连续数字是否恰好是一个完整的 11 位手机号。
+
+    最多回看 12 位: 第 12 位仍是数字说明不是「恰好 11 位」, 交回原吞噬逻辑
+    (长数字串的插值拼接不受本判据影响)。
+    """
+    end = len(chars)
+    start = end
+    floor = max(0, end - 12)
+    while start > floor and chars[start - 1].isdigit():
+        start -= 1
+    run = "".join(chars[start:end])
+    return len(run) == 11 and _RE_COMPLETE_MOBILE.fullmatch(run) is not None
+
+
 def normalize(text: str) -> Tuple[str, List[int], List[Tuple[int, int]]]:
     """归一化文本。
 
@@ -78,7 +101,10 @@ def normalize(text: str) -> Tuple[str, List[int], List[Tuple[int, int]]]:
             j = i + 1
             next_is_sep = j < n and _nfkc_char(text[j]) in _SEP_CHARS
             next_digit = j < n and _nfkc_char(text[j]).isdigit()
-            if prev_digit and next_digit and not next_is_sep:
+            # 关键: 左侧已是一个**完整**手机号时不得再吞, 否则列表末项
+            # 紧跟换行/空格 + 数字开头文本会粘成超长串, 边界正则失效漏检。
+            complete_mobile = prev_digit and _trailing_is_complete_mobile(chars)
+            if prev_digit and next_digit and not next_is_sep and not complete_mobile:
                 if spans:
                     s, _e = spans[-1]
                     spans[-1] = (s, j)

@@ -15,16 +15,22 @@
 //
 // 退出码：0=全部可解析（且无重复 preset id），1=发现问题，2=参数/读取错误。
 import { readFileSync, existsSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const require = createRequire(import.meta.url);
-// 让 require.resolve 以 dsh-cli 的 node_modules 为基准（本机实现 checkout）
-const DSH_CLI_NODE_MODULES = "E:/Code/dsh-cli/node_modules";
-const dshRequire = createRequire(resolve(DSH_CLI_NODE_MODULES, "probe.cjs"));
+// 以全局安装的 dsh 的 node_modules 为基准（npm i -g @deepseek-ai/dsh）。
+// 可用 DSH_NODE_MODULES 覆盖，便于切换到其他安装位置。
+const DSH_NODE_MODULES = (
+  process.env.DSH_NODE_MODULES ||
+  execSync("npm root -g", { encoding: "utf8" }).trim()
+).replace(/\\/g, "/");
+// 从 @deepseek-ai/dsh 的 package.json 解析：npm 会把部分传递依赖（如 yaml）
+// 嵌在它自己的 node_modules 下，而不是平铺到全局根目录。
+const dshRequire = createRequire(resolve(DSH_NODE_MODULES, "@deepseek-ai/dsh/package.json"));
 
-const YAML = require(resolve(DSH_CLI_NODE_MODULES, "yaml"));
+const YAML = dshRequire("yaml");
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "..");

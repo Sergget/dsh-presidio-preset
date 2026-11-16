@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "PII 屏蔽词",
+    "description": "添加需要被 PII 防护插件自动脱敏的词或短语。"
+  }
+}

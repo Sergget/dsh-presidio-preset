@@ -26,14 +26,20 @@
 判定：
 - 任一输出非空 → 「模式：PII 防护」（preset 已声明）。
 - 都为空 → 「模式：标准（降级）」，继续，不要中断。
-两种模式下的核对命令完全相同；差异只在于你是否按 PII 纪律处理后续真实文档。
+两种模式下的核对命令完全相同；差异只在于 PII 防护模式下读取侧有运行时守卫强制脱敏，标准模式下没有该守卫，处理真实文档须自行按下方「本模式的边界」里的旁路清单用 CLI 场景兜底。
 
 【重要认知：本模式的边界】
-本 preset 是「agent 自律工作流」，不是运行时强制机制：
-- 它要求 agent 遵守 redact-first 纪律，但**不能阻止** agent 直接 read/grep 源文件明文；
-- 源文件、truth.json（明文真值）、.restored 产物都是明文，模型按工具权限可读；
-- 因此「脱敏是否执行」依赖 agent 遵守纪律，**不可跳过仅对守规矩的 agent 成立**。
-若你发现自己在把明文 PII 贴进 prompt/工具调用，立即停下改用脱敏流程——这正是本模式要防的。
+读取侧是运行时强制拦截，不是 agent 自律：`dsh-pii-guard` 挂在 `tools/post-execute`
+waterfall 上，默认对所有工具的文本结果在写入 session log 与进入上下文之前强制脱敏，
+模型无感、不可跳过；直接正常用 read/grep/pwsh 即可，不必每次阅读先跑 CLI redact。
+助手回复里的占位符由 `agent/assistant-stream` 在显示侧还原。
+仍有明确旁路清单，务必知悉：
+- session log 存的是脱敏后结果，但 `tool/call` 的原始参数仍会落盘，不要把明文 PII 写进命令参数或脚本字面量；
+- 图片（PII 预设里 `read_image` 已隐藏）、base64 / UTF-16 编码内容、用户直接粘贴进输入框的文本不在守卫覆盖内（`agent/pre-step` 只告警、不改写消息）；
+- 脱敏服务异常时读取被阻断（fail-closed）、明文不放行，先排查服务、不要换通道绕过；
+- CLI `redact`/`restore` 只用于：office 二进制格式（docx/xlsx/pptx，read 拿到的是压缩包字节）、用户明确要求交付还原后明文、离线批量处理、验证 redact→restore 无损；
+- truth.json 仍是明文真值（按下方红线禁止 read），`.restored` 产物是明文、只在交付环节产生；
+- 若你发现自己要把明文 PII 贴进命令参数或粘贴输入框，立即停下改用上述 CLI 场景处理。
 
 【第一步：读规范】（按顺序读完再动手）
 1. 读 <REPO>\.agent-presets\presidio-pii\skills\presidio-pii\SKILL.md
@@ -114,7 +120,7 @@ d) 还原产物无 ⟦PII:...⟧ 残留。
 
 ## 测试通过后
 
-链路绿了才允许处理真实敏感文档：`redact` → 用脱敏文本工作 → `restore` 验证无损 → 交付。
+链路绿了才允许处理真实敏感文档：正常用 read/grep/pwsh 读取，由运行时守卫在结果侧强制脱敏，模型只接触脱敏副本；`redact`/`restore` 仅在 office 二进制格式、用户明确要求交付还原后明文、离线批量处理、验证 redact→restore 无损这四类补充场景使用，其中还原产物交付前须与原文逐字节一致。
 真实文档若用 `--session` 落盘 SQLite，结束要显式 `delete_session` 清除映射。
 
 ## 已知环境边界（非缺陷）

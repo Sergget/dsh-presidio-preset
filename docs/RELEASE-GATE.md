@@ -16,15 +16,34 @@
 | 3 | redact→restore 无损（md + office 三格式） | PASS |
 | 4 | 自动 restore 接线（模型回复侧） | PASS（2026-11-10 拍板方案 B 并实现：显示侧还原） |
 | 5 | 格式覆盖面 | PASS（文本类 + pwsh 前台 + job_output/job_list） |
-| 6 | 依赖漏洞 | PASS |
+| 6 | 依赖漏洞 | FAIL（2026-11-16 复核：环境 `opentelemetry-api 1.45.1` 报 `CVE-2026-126360`，修法 1.45.2；与本轮代码无关，见 §6） |
 | 7 | 密钥扫描（工作树 + 历史） | PASS |
-| 8 | 单元测试套件 | PASS |
+| 8 | 单元测试套件 | PASS（2026-11-16：222 passed，含用户屏蔽词 9 条） |
 | 9 | 可复现安装（wheel + 干净环境） | PASS |
 | 10 | 源码可溯源（origin 含 HEAD / 产物清单） | PASS（A：origin 已含 HEAD，2026-11-10 推送） |
 | 11 | 仓库不落真实 PII / 映射库 | PASS |
 | 12 | 外部语料（网络下载）回归 | PASS（离线时 SKIP） |
 
-> **最终复核（2026-11-10，正常 PowerShell 窗口）**：`python tools/release_gate.py --json $env:TEMP\release_gate_final.json` → **PASS 12 / FAIL 0 / SKIP 0 / MANUAL 0，退出码 0**（195.3s）。#6 pip-audit 0、#8 160 passed、#9 两次构建字节一致（`77154909…`，58831B）均在正常环境实测通过；此前 DSH 会话内的 3 个 FAIL 确认为沙箱写权限假阴性。**门禁已全部通过，可发布**。证据：正常窗口终端输出（`tools/release_gate.py --json $env:TEMP\release_gate_final.json`）。
+> **本轮修复（2026-11-16，人名泄漏 + meta.lines 原文）**：会话 `session-18565589-7045-4c0a-aedd-852209df044d` 暴露两条独立缺陷并已修复。
+> (A) 新版 `read` 的 `tool/result.meta.lines` 直接派生自 canonical `value.lines`（48 行原文），而 `tools/post-execute` 只改 `content` 碰不到 `meta` → 模型看到占位符，但 session log 与 GUI 卡片仍留明文。修法：插件用 `redactValueLeaves()` 递归把 `result.value` 的原文替换成占位符，返回公开的 `{kind:"accept", value}` 决策；`pipeline.js createSuccessResult()` 用新 value 重跑 `render` + `presentationMeta`，content / meta.lines / meta.path 一起脱敏。仅当检测到 PII 且工具带 `meta` 时走此路径（无 PII 零 schema 风险），shell+job 保持原 content 路径以保留截断/非文本标记；`redact()` 恒发 `mode:"full"` 拿原文映射，`PII_GUARD_DISPLAY=mask` 时显示侧打码由 Node 侧 `displayValue()` 复刻。
+> (B) `ChinesePersonRecognizer` 的 `_NON_NAME_CHARS` 含「之」「同」「也」且不支持复姓/带学号后缀 → 名单里 3 个名字连 `content` 都漏检。修法：新增独立 `ChineseRosterPersonRecognizer`（不动现有人名识别器，其测试全绿），只在「显式名单引导词 + 冒号 + ≥3 项顿号/逗号链」且每项为 2-4 纯汉字时触发，内联 26 个复姓常量 + `_ROSTER_NEGATIVE` 负样本词整链否决，只 emit 名字本体（剥掉「（26）」学号后缀，保证 restore 无损）。`get_chinese_recognizers()` 现 15 个识别器，`_resolve_overlaps` 长实体去重。
+> 精度约束（agent.md:82-84）：未改 `assets/*.txt`；补一条 `test_common_words_are_not_pii` 负样本「名单：身份证、手机号、银行卡、人名等个人信息。」；`tests/test_roster_person.py` 覆盖 4 类历史漏检形态 + 17 条负样本 + 15 条整引擎负样本 + 无 jieba 模式，全合成值。真实文档 E2E：名单 27 token 全部占位符、`tokens_still_plaintext=0`、`PERSON=31 / PHONE_NUMBER=3`、`restore_byte_exact=true`；真实 `server.py` IPC 的 JS E2E 验证 `accept+value` 全脱敏且不原地改冻结对象。残留边界不变：`tool/call` 原始参数仍落盘、pwsh/bash 的 `meta.cwd`、用户直接粘贴进输入框的文本、read_image。
+
+> **本轮新增（2026-11-16，用户自定义屏蔽词 UI）**：新 bundle `plugins/dsh-pii-guard-terms`（包名 `dsh-pii-guard-terms`，patch 行 `dsh-pii-guard-terms:terms`）在**设置页**注册 `settings.section`（id `pii-guard-terms`, order 30）+ `settings.section.icon`，用户可自行增删「需要屏蔽的词或短语」。
+> 链路：设置页 → `GET/POST /api/dsh-pii-guard/terms[/save]`（Host 半体 `ctx.webServer.register`，自实现 loopback + `Sec-Fetch-Site`/Origin 同源证明三层围栏，64 KB 请求体上限）→ 原子写 `E:/Code/dsh-presidio-preset/.pii_presidio_store/user_terms_rules.json`（每词一条自定义规则 `entity_type:"USER_TERM"`、`priority:0`、`pattern` 为 `escapeLiteral` 后的字面量、附加 Python 会忽略的 `term` 键用于无损回读）→ `preset.json` 的 `config.custom_rules_path` 指向该文件 → 引擎 `CustomRuleSet.refresh()` 每秒比对 `(path, mtime_ns, size)` 签名，**1 秒内热更新**，无需重启。
+> 关键坑：`CustomRuleSet.refresh()` 在规则产出 0 条而旧规则非空时**保留旧规则**（`custom_rules.py:403-406`），所以「清空全部词」必须写单条永不匹配占位规则 `pattern:"(?!)"`，不能写空数组；`escapeLiteral` 保证含正则元字符的词按字面匹配（`a.c` → `a\.c`），且不用捕获组（有捕获组时只脱敏 group(1)）。
+> 证据：`tests/js/plugin_terms.mjs` 30 条冒烟、`tests/test_user_terms.py` 9 条单测（规则文件语义 + 热更新）、`pytest` **222 passed**；真实运行进程联调：裸请求 403 `missing same-origin proof`、`DELETE` 405、cross-site 403、保存后规则文件落盘、清空后回落占位规则；同一已缓存引擎在保存后 1.3s 内命中 `⟦PII:USER_TERM:0001⟧`，清空后命中归零。门禁 #5 新增 `terms=` 与 `terms_wiring=` 两项断言。限制：最多 500 条、单条 ≤200 字符、纯字面匹配（不支持正则）。
+
+：`python tools/release_gate.py --json $env:TEMP\pii_verify_leak\pii_gate_full_leak.json` → **PASS 11 / FAIL 1 / SKIP 0 / MANUAL 0（677.1s，退出码 1）**，证据：`C:\Users\sergg\AppData\Local\Temp\pii_verify_leak\verify2_result.json` 与 `pii_gate_full_leak.json`。#1/#2/#3/#4/#5/#7/#8/#9/#10/#11/#12 全 PASS；#5 `src=repo plugin=ok; installed_sync=ok; js_smoke=pass/display=pass`、#8 **213 passed in 45.94s**、#9 wheel 两次构建一致（`3ce8d89dbdf81293…`，61357B，`reproducible=True`）、#10 `HEAD=db7c77a6 origin/master=db7c77a6 ahead=0`（`commit_match=False tree_digest_match=False`，按「origin 可达」路径 A PASS）。**唯一 FAIL 是 #6 依赖漏洞**：环境 `opentelemetry-api 1.45.1` 报 `CVE-2026-126360`（fix 1.45.2），属本机已安装包的上游 advisory，与本轮 PII 代码/依赖声明无关（11-11 复核时 pip-audit 为 0）；升级 `opentelemetry-api>=1.45.2` 后重跑 #6 即可恢复 12/12，本次不擅自改动依赖。`tests/js/plugin_jobs.mjs` 现 24 条、`plugin_display.mjs` 6 条，均由 #5 调用。
+> 另记：本轮验证全程在 `pwsh` 工具的 Windows Job runner 故障（`0xC0000142`）下通过 Playwright server 的 `windowsHide:true` 子进程通道完成；`pwsh`/`glob`/`grep` 工具本身不可用，不影响产物结论。
+
+> **复核结论（2026-11-16 晚，用户自定义屏蔽词 UI 落地后全量门禁）**：`python tools/release_gate.py --json C:/Users/sergg/AppData/Local/Temp/pii_gate_run2/gate.json` → **PASS 11 / FAIL 1 / SKIP 0 / MANUAL 0（157.1s）**。#1/#2/#3/#4/#5/#7/#8/#9/#10/#11/#12 全 PASS；#5 新增 `terms=ok; terms_wiring=ok(.pii_presidio_store/user_terms_rules.json)`；#8 **222 passed in 13.53s**；#9 wheel 两次构建仍字节一致（`3ce8d89dbdf81293…`，61357B，`reproducible=True`）。**唯一 FAIL 仍是 #6 依赖漏洞**，且仍是环境级 `opentelemetry-api 1.45.1` → `CVE-2026-126360`（fix 1.45.2），与本轮改动无关；本轮未升级该全局包。另：本轮 `pwsh`/`glob`/`grep` 工具持续故障（`Windows Job runner exited with exit code 3221225794` / `ripgrep provider failure`），全部验证经 Playwright server 的 `windowsHide:true` 子进程通道完成。
+
+> **最终复核（2026-11-11，v0.2 强化后）**：`python tools/release_gate.py --json $env:TEMP\pii_gate_full.json` → **PASS 12 / FAIL 0 / SKIP 0 / MANUAL 0，退出码 0**（622.0s）。#1 引擎层 12 处替换、`#3` 三格式逐字还原、`#5` 仓库/安装插件 sha256 一致 + 21 条 JS 冒烟全过、`#6` pip-audit 0、`#8` **175 passed**、`#9` 两次构建字节一致（`63a3b1eb…08a`，59489B）、`#12` 外部语料全无损，均在正常环境实测通过。证据：`C:\Users\sergg\AppData\Local\Temp\pii_gate_full.json`。
+> 本轮变更：拆掉 persona 五步 CLI 双轨；插件改为默认全工具结果扫描 + fail-closed；新增写入侧 scoped shadow 占位符还原、`read_image` 隐藏、`agent/pre-step` 兜底告警；修复末尾手机号漏检（15 条新回归用例）。
+> 注意：`release/presidio-pii-dsh-0.1.0.json` 仍记录 2026-11-10 的 wheel 哈希与 commit，因源码已变且工作树未提交，#10 按「origin 可达」路径 A 判定 PASS；**下次正式发布时须重跑 #9/#10 重新生成清单**。
+
+> **历史复核（2026-11-10，正常 PowerShell 窗口）**：`python tools/release_gate.py --json $env:TEMP\release_gate_final.json` → **PASS 12 / FAIL 0 / SKIP 0 / MANUAL 0，退出码 0**（195.3s）。#6 pip-audit 0、#8 160 passed、#9 两次构建字节一致（`77154909…`，58831B）均在正常环境实测通过；此前 DSH 会话内的 3 个 FAIL 确认为沙箱写权限假阴性。**门禁已全部通过，可发布**。证据：正常窗口终端输出（`tools/release_gate.py --json $env:TEMP\release_gate_final.json`）。
 
 ---
 
@@ -33,7 +52,7 @@
 - [x] **判定标准**：read/grep 结果中的 PII 被替换为 `⟦PII:TYPE:NNNN⟧`，敏感人名明文不出现；个人类实体计数为 0 时不得误报。
 - **当前状态**：PASS
 - **证据位置**：
-  - 插件实现：`E:/Code/dsh_home/plugins/dsh-pii-guard/lib/index.js`（接缝 `tools/post-execute`，`prepend: true`，失败降级透传并 stderr 告警；`GUARDED_TOOLS = {read, grep}`）
+  - 插件实现：`E:/Code/dsh_home/plugins/dsh-pii-guard/lib/index.js`（接缝 `tools/post-execute`，`prepend: true`；2026-11-11 起默认对**所有**工具的文本结果脱敏，黑名单 `SKIP_TOOLS={job_kill,read_image}`；服务异常 **fail-closed 阻断**，仅 `PII_GUARD_FAIL_OPEN=1` 排障时透传）
   - 复测（引擎层，detector 修复后重跑）：`paper-01.md` → PERSON 8 / ORGANIZATION 2 / LOCATION 1 / EMAIL_ADDRESS 1，共 12 个占位符，明文人名 absent=true；空白序列与原文完全一致（`whitespace_seq_same=true`，换行/Tab/缩进无损）
   - 计数变化说明：修复前 PERSON 9 / 共 13，多出的 1 条是章节标题「方法」+尾随空格被误判为人名（常用词被尾随空白绕过 `is_common_word` 检查），修复后误报消失，不是漏报；6 篇 paper 语料均同此规律
   - 运行日志：`.pii_presidio_store/hook_log.jsonl`（含 09:56:18 一次 `n_replaced=4` 的成功脱敏记录）。该日志 2026-11-06 起只存元数据（实体类型/数量、内容指纹、`conv_sha1`/`doc_sha1`），不再写原文；存量文件已原地清洗（4,403,418 B → 14,249 B，明文行 65 → 0）
@@ -77,7 +96,7 @@
   - `server.py` 新增 `op=restore` 协议与 redact 响应的**增量 map 下发**（只含本次新增映射；mask 模式下发打码值）。映射键口径与 `before_llm` 一致（`hooks.session_id()` 哈希）。
 - **证据位置**：
   - 源码断言：`tools/release_gate.py --only 4` → PASS（plugin_display / server_restore 全命中）
-  - 行为冒烟：`tests/js/plugin_display.mjs` 6 条（无映射透传、跨 chunk 分裂不丢字符、扣尾缓冲、end 兜底、start 清缓冲）；`tests/js/plugin_jobs.mjs` 13 条原用例不回归
+  - 行为冒烟：`tests/js/plugin_display.mjs` 6 条（无映射透传、跨 chunk 分裂不丢字符、扣尾缓冲、end 兜底、start 清缓冲）；`tests/js/plugin_jobs.mjs` 24 条（2026-11-16 扩充：新增 meta/value 重渲染、无 PII 不动 value、shell 不走 value 三条，见 #5）
   - 闭环验证：redact→map→restore(full) 逐字还原（`full_ok=true`）；mask 值形如 `13*******78`、`z***@example.com`
   - 残余说明：B 依赖 `agent/assistant-stream` 非公开契约（dsh 0.2.2-rc.1 实测可用），dsh 升级需复验；用户把还原后的明文复制进输入框属于使用约定问题，插件不可拦截
 
@@ -89,9 +108,12 @@
   - md/txt/csv/json：读取侧拦截生效（csv 实测 PERSON/ID/PHONE/ORG 计数 > 0）
   - docx/xlsx/pptx 经 read：原始字节 UTF-8 解码后占位符 0、PII 明文 0 —— 因 zip DEFLATE 压缩，内容本身不可用，**不构成泄露**，但用户也读不到内容；此类文件应走 CLI 产物级 redact/restore
   - rg 对 docx 内证件号默认 `exit=1`，加 `--text` 仍 `exit=1`
-- [x] **shell（pwsh 前台 + 后台任务 + isError）输出**：PASS —— 插件 `GUARDED_TOOLS = {read, grep, pwsh, job_output, job_list}`；`job_output`/`job_list` 单块超过 256,000 字节先截断再脱敏并追加截断标记；非文本输出（NUL>1% 或不可打印>30%）不脱敏并追加标记行；shell/后台任务的 `isError` 文本同样脱敏（read/grep 的 `isError` 维持透传）；逃生开关 `PII_GUARD_SHELL=off`（对 pwsh 与后台任务生效）/ `PII_GUARD_SHELL_ALLOWLIST=<regex>`（仅 pwsh），命中写 `shell_bypass` 审计，不含明文。
+- [x] **shell（pwsh 前台 + 后台任务 + isError）输出**：PASS —— 插件自 2026-11-11 起改为**默认全工具扫描**（`SKIP_TOOLS = {job_kill, read_image}` 黑名单），`read`/`grep`/`pwsh`/`job_*`/MCP/PTC/web 等文本结果一律脱敏；`job_output`/`job_list` 单块超过 256,000 字节先截断再脱敏并追加截断标记；非文本输出（NUL>1% 或不可打印>30%）不脱敏并追加标记行；shell/后台任务的 `isError` 文本同样脱敏（其它工具的 `isError` 维持透传）；下游按 `value` 替换 canonical 结果时**阻断**而非静默放行；逃生开关 `PII_GUARD_SHELL=off`（对 pwsh 与后台任务生效）/ `PII_GUARD_SHELL_ALLOWLIST=<regex>`（仅 pwsh），命中写 `shell_bypass` 审计，不含明文。
+  - **写入侧（2026-11-11 新增）**：`agent/created` 里用公开 scoped shadow（`agent.ctx.tools.register({...original, execute})` + `agent.ctx.effect`）包住 `write`/`edit`/`apply_patch`/`str_replace_editor`，把模型参数里的 `⟦PII:...⟧` **还原回原文**再交给原实现，避免占位符写坏用户文件；`read_image` 用 `agent.ctx.tools.restrict({deny:["read_image"]})` 在 PII 预设内隐藏；`agent/pre-step` 兜底扫描只告警、不改写消息。
+  - **fail-closed（2026-11-11 新增）**：Python 服务 spawn 失败/退出/超时/坏响应 → 返回 `{kind:"block"}` 阻断工具结果，绝不放行明文；仅 `PII_GUARD_FAIL_OPEN=1`（排障用，默认关闭）回退到旧的降级透传。
+  - **meta/value 重渲染（2026-11-16 新增）**：带 `presentationMeta` 的工具（新版 `read` 的 `meta.lines`、`grep` 的命中行）在检测到 PII 时，插件返回 `{kind:"accept", value}`（递归 `redactValueLeaves()` 把 canonical value 的原文换占位符），由 `pipeline.js createSuccessResult()` 重跑 `render` + `presentationMeta`，模型上下文 / session log `meta` / GUI 卡片一起脱敏；绝不与原 `content` 路径同时返回（pipeline.js:684 会抛 TypeError）。无 PII、无 meta、shell+job、下游改过 content 时保持原 content 路径，TRUNC_MARK / 非文本标记 / 256 KB 装饰不丢。`redact()` 恒发 `mode:"full"`，`PII_GUARD_DISPLAY=mask` 的显示侧打码由 `displayValue()` 在 Node 侧复刻。
   - 引擎级语义回归：`tests/test_shell_redaction.py` 23 条（14 条无 PII 日常输出逐字节不变、9 条含 PII 的结构保持与还原）
-  - 插件行为冒烟：`tests/js/plugin_jobs.mjs` 13 条（job_output/job_list 脱敏、256 KB 截断上限、无 PII 不变、job_kill 放行、非文本标记、read 仍拦、pwsh/job isError 脱敏、read isError 透传、Python 服务 spawn 失败降级透传不崩溃、非法 allowlist 正则不放行），由门禁 #5 调用 node 执行
+  - 插件行为冒烟：`tests/js/plugin_jobs.mjs` 24 条（job_output/job_list 脱敏、256 KB 截断上限、无 PII 不变、job_kill 放行、非文本标记、read 仍拦、默认全工具扫描、pwsh/job isError 脱敏、read isError 透传、spawn 失败 **fail-closed 阻断**、下游 value 替换阻断、非法 allowlist 不放行、写入侧 wrapper 占位符还原、read_image 隐藏、pre-step 只告警、**meta 工具走 value 重渲染**、**无 PII 不替换 value**、**shell 不走 value 重渲染**），由门禁 #5 调用 node 执行
   - 一键门禁 #5：插件源码断言（含 job 工具、截断常量、isError 范围）+ node 冒烟 + 引擎语义抽查
   - 插件已纳入仓库：`plugins/dsh-pii-guard/lib/index.js`（sha256 `B43F93AF…E4071`，与安装态 `E:/Code/dsh_home/plugins/dsh-pii-guard/lib/index.js` 逐字节一致；#5 比对 sha256，drift 即 FAIL，反向验证：改动仓库副本 → FAIL，恢复 → PASS）
   - 修复一处连带缺陷：归一化曾吞掉数字间的连续空白，把 Get-Process 表格列拼成伪卡号；现改为只吞单个分隔符
@@ -101,8 +123,9 @@
 ## 6. 依赖漏洞
 
 - [x] **判定标准**：`pip check` 无破损依赖；`pip-audit` 对安装集合报 0 条已知漏洞。
-- **当前状态**：PASS
+- **当前状态**：FAIL（2026-11-16 复核，上游环境 advisory，非本轮代码引入）
 - **证据**：
+  - 2026-11-16 `pip-audit`：`opentelemetry-api 1.45.1` → `CVE-2026-126360`，fix versions `1.45.2`；`pip check` 无破损依赖。升级该包到 ≥1.45.2 后重跑 #6 即可恢复 PASS。该包不在本轮 PII 改动范围内（仓库依赖声明未变），故如实记 FAIL，不用「看起来能用」凑 PASS。
   - 升级前后：`pillow 12.3.0 → 13.0.0`（原 41 条 advisory）；`certifi 2026.7.22 → 2026.10.18`（原 PYSEC-2026-4320）
   - `pip check` → No broken requirements
   - `uvx pip-audit -r <freeze 去掉本地 git 包>` → `No known vulnerabilities found`
@@ -125,8 +148,8 @@
 ## 8. 单元测试套件
 
 - [x] **判定标准**：`pytest -q` 全绿，无 skip 掩盖失败。
-- **当前状态**：PASS —— `160 passed`（`D:\Python\313\python.exe -m pytest -q`；含 9 条结构保持/数字误报回归、5 条日志去明文与轮转、23 条 shell 输出语义回归用例）
-- **证据位置**：`tests/`（`test_engine.py`、`test_flow.py`、`test_structures.py`、`test_variants.py`、`test_custom_rules.py`、`test_shell_redaction.py`）
+- **当前状态**：PASS —— `213 passed`（2026-11-16 `D:\Python\313\python.exe -m pytest -q --no-header`；含 `tests/test_roster_person.py` 37 条名单识别/负样本/无 jieba 用例、`test_common_words_are_not_pii` 新增 1 条名单泛称负样本；基线 175 → 212 → 213）
+- **证据位置**：`tests/`（`test_engine.py`、`test_flow.py`、`test_structures.py`、`test_variants.py`、`test_custom_rules.py`、`test_shell_redaction.py`、`test_phone_last_in_list.py`、`test_roster_person.py`）；`C:\Users\sergg\AppData\Local\Temp\pii_verify_leak\verify3_result.json`
 
 ## 9. 可复现安装
 

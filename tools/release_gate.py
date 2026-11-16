@@ -252,7 +252,55 @@ def check_formats() -> dict:
                                # 方案 B 显示侧还原（门禁 #4 实现）
                                "PII_GUARD_DISPLAY", "agent/assistant-stream",
                                "PH_FULL", "PH_TAIL", "splitDisplayable",
-                               "phMap", "displayBufs") if pat not in src]
+                               "phMap", "displayBufs",
+                               # v0.2：默认全工具扫描 / fail-closed / 写入侧还原 / 兜底告警
+                               "SKIP_TOOLS", "FAIL_OPEN", "BLOCK_MARK",
+                               "PII_GUARD_FAIL_OPEN", "restoreArgs", "restoreText",
+                               "WRITE_TOOLS", "WRITE_TEXT_KEYS",
+                               '"agent/created"', '"agent/pre-step"',
+                               'restrict({ deny: ["read_image"] })',
+                                'value replacement present, blocking result',
+                                "redact failed, blocking result",
+                                # v0.3：meta/value 重渲染，堵住 read/grep 的 meta.lines 原文
+                                "redactValueLeaves", "pairs.sort",
+                                "value: redactValueLeaves(result.value, pairs)",
+                                "result?.meta !== undefined") if pat not in src]
+
+    # v0.4：用户自定义屏蔽词 UI（dsh-pii-guard-terms 设置页）
+    terms_src = REPO / "plugins" / "dsh-pii-guard-terms"
+    terms_files = ["package.json", "cordis.patch.yml", "lib/index.js",
+                   "client.js", "locale/en.json", "locale/zh.json", "icon.svg"]
+    terms_missing = [f for f in terms_files if not (terms_src / f).is_file()]
+    terms_ev = ""
+    if not terms_missing:
+        host_src = (terms_src / "lib" / "index.js").read_text(encoding="utf-8")
+        client_src = (terms_src / "client.js").read_text(encoding="utf-8")
+        host_missing = [pat for pat in (
+            "USER_TERM", "user-term-placeholder", "(?!)",
+            "/api/dsh-pii-guard/terms", "/api/dsh-pii-guard/terms/save",
+            "isLoopbackRequest", "hasSameOriginProof", "guard(",
+            "normalizeTerms", "writeTerms", "readTerms", "escapeLiteral",
+            "ctx.inject(['webServer']",
+            "dsh-pii-guard-terms",
+        ) if pat not in host_src]
+        client_missing = [pat for pat in (
+            "settings.section", "settings.section.icon", "pii-guard-terms",
+            "dsh-pii-guard-terms", "api/dsh-pii-guard/terms",
+            "__ModuleLoader__.load", "return exports",
+        ) if pat not in client_src]
+        terms_missing = terms_missing + host_missing + client_missing
+        terms_ev = (f"terms={'ok' if not terms_missing else '缺:' + ','.join(terms_missing)}; ")
+
+    # 用户屏蔽词接线：preset.custom_rules_path 必须指向规则文件，且占位规则不可为空数组
+    preset_p = REPO / ".agent-presets" / "presidio-pii" / "preset.json"
+    wiring_ev, wiring_ok = "terms_wiring=missing", False
+    try:
+        cfg = json.loads(preset_p.read_text(encoding="utf-8")).get("config") or {}
+        crp = cfg.get("custom_rules_path")
+        wiring_ok = isinstance(crp, str) and crp.strip() != ""
+        wiring_ev = f"terms_wiring={'ok' if wiring_ok else 'unset'}({crp})"
+    except (OSError, ValueError) as exc:  # pragma: no cover - 配置损坏
+        wiring_ev = f"terms_wiring=error({exc.__class__.__name__})"
 
     node = shutil.which("node")
     js_ok, js_ev = False, "node=missing"
@@ -295,18 +343,21 @@ def check_formats() -> dict:
     plain_ok = r1 == plain1 and r2 == plain2
     pii_ok = ("张伟" not in r3 and "13800138000" not in r3
               and "[stderr]\n" in r3 and "[exit code: 1]" in r3)
-    ok = not missing and plain_ok and pii_ok and js_ok and sync_ok
+    terms_ok = not terms_missing and wiring_ok
+    ok = not missing and plain_ok and pii_ok and js_ok and sync_ok and terms_ok
     ev = (f"src=repo plugin={'ok' if not missing else '缺:' + ','.join(missing)}; "
           f"{sync_ev}; {js_ev}; plain_unchanged={plain_ok}; "
           f"pii_redacted={'张伟' not in r3}; "
-          f"markers_kept={'[exit code: 1]' in r3}")
+          f"markers_kept={'[exit code: 1]' in r3}; "
+          f"{terms_ev}{wiring_ev}")
     if not PLUGIN.is_file():
         return {"status": SKIP, "evidence": ev,
                 "reason": "已安装插件不存在，无法校验安装态与仓库副本一致；"
                           "仓库副本本身已通过语义与冒烟检查"}
     reason = ("仓库副本与安装副本一致，pwsh + job_output/job_list 均已拦截且语义正确"
-              "（含 256 KB 截断与 isError 脱敏）"
+              "（含 256 KB 截断与 isError 脱敏）；用户自定义屏蔽词 UI 与其规则接线均已就位"
               if ok else "插件缺少 pwsh/后台任务/isError 逻辑、node 冒烟失败、"
+                         "用户屏蔽词 bundle 或 preset 接线缺失、"
                          "安装态与仓库副本不一致或引擎语义回归")
     return {"status": PASS if ok else FAIL, "evidence": ev, "reason": reason}
 

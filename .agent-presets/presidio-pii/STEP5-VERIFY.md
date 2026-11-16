@@ -53,6 +53,6 @@ ORGANIZATION / LOCATION 占位符可出现（非个人信息）。逐类报数�
 | 结果 | 下一步 |
 | --- | --- |
 | 3/3 PASS | 方案 A 端到端生效 → 按 PLAN-pii-guard.md Step 6 收尾（文档更新 + 生产评估基准：真实样本回归仍待做） |
-| 用例 1 FAIL（明文出现） | 把引用的原文发我——排查方向：插件未激活 / exec.name 不匹配 / IPC 失败走了降级透传 |
-| 用例 1 报错 | 把 read 的报错原文发我——排查方向：Python 服务 spawn 失败 / 超时 |
+| 用例 1 FAIL（明文出现） | 把引用的原文发我——排查方向：插件未激活 / exec.name 不匹配 / 用户显式设了 `PII_GUARD_FAIL_OPEN=1` |
+| 用例 1 报错（工具结果被 `[pii-guard]` 阻断） | 正常行为：Python 服务 spawn 失败/超时触发 fail-closed。查服务进程与 `PII_GUARD_PY`，不要用别的工具绕过去 |
 | 用例 2/3 FAIL | 引擎误伤率问题，调 custom_rules/白名单，与 guard 无关 |

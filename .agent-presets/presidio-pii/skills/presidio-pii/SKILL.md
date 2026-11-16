@@ -75,13 +75,39 @@ $env:PII_DSH_WHITELIST = 'C:\path\whitelist.txt'   # 每行一个关键词，# �
 - 映射库默认 `.pii_presidio_store/sessions.db`（SQLite），含**明文 PII**，已 gitignore——**绝不提交、不同步**。
 - 会话结束可调 `SessionRegistry.delete_session(sid)` 清除。
 - 代码规则文件 import 即执行：只加载明确指向的规则文件，勿指向不可信来源。
-- 还原是唯一允许「把 PII 放回文本」的环节，且只对最终用户可见输出执行。
+- 还原（`agent/assistant-stream` 显示侧自动还原，或 CLI `restore`）只对最终用户可见输出执行，是唯一允许「把 PII 放回文本」的环节；会话内部上下文一律保持脱敏态。
 
 ## 七、工作流红线（本 preset 强制）
 
-1. 原文含 PII → 先脱敏再进任何 prompt/tool call/外部服务。
-2. 交付前验证无损还原：`restore` 产物与原文逐字节一致。
-3. 映射文件、hook 日志、脱敏中间产物一律留在 `.pii_presidio_store/` 或 `*-redacted/`，不提交。
+**主路径 —— 读取侧由运行时守卫强制脱敏，模型无感、不可跳过。**
+`dsh-pii-guard` 插件挂在 `tools/post-execute` waterfall 上，默认对**所有工具的文本结果**
+在写入 session log 与进入上下文之前强制脱敏（PII → `⟦PII:TYPE:0001⟧` 占位符）。
+模型直接正常用 `read` / `grep` / `pwsh` / `job_output` / `job_list`，
+**不必、也不应每次阅读前手工跑一遍 CLI `redact`**。助手回复里的占位符由
+`agent/assistant-stream` 在显示侧还原，用户看到的是明文。
+
+**CLI `redact` / `restore` 只用于四类补充场景**：
+
+1. office 二进制格式（docx/xlsx/pptx）——`read` 拿到的是压缩包字节，守卫识别不到其中 PII，
+   须先 `python -m presidio_pii.cli redact <文件>` 产出脱敏副本再工作；
+2. 用户明确要求交付还原后的明文——用 `restore`，且只对最终用户可见输出执行；
+3. 离线批量处理——不走会话、一次性处理大量文件；
+4. 验证 redact → restore 无损——交付前 `restore` 产物与原文逐字节一致。
+
+**边界 / 旁路清单（务必知悉）**：
+
+- session log 里存的是**脱敏后**结果；但 `tool/call` 的**原始参数仍会落盘**，
+  因此不要把明文 PII 写进命令参数或脚本字面量（`write`/`edit` 入参侧另有 wrapper 脱敏兜底，
+  不改变原始参数落盘这一事实）。
+- 守卫覆盖的是工具**文本结果**：图片通道（PII 预设里 `read_image` 已隐藏）、
+  base64 / UTF-16 编码内容、用户直接粘贴进输入框的文本**不在覆盖内**
+  （`agent/pre-step` 只做告警扫描，不改写消息）；这些通道按上述 CLI 场景处理。
+- 脱敏服务异常时走 **fail-closed**：读取被**阻断**，明文不放行；
+  此时先排查服务，不要改用其它通道绕过。
+- 映射文件、hook 日志、脱敏中间产物一律留在 `.pii_presidio_store/` 或 `*-redacted/`，不提交。
+
+> 第一节「核心命令速查」、第六节「会话映射库与安全」及 Windows 绝对路径 / 沙箱前提，
+> 在四类 CLI 场景下仍全部适用。
 
 ## 八、测试集核对（处理敏感文档前必做）
 

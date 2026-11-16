@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="PII blocklist">
+  <path d="M32 6 12 14v16c0 13 8.6 23.4 20 27 11.4-3.6 20-14 20-27V14L32 6z" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linejoin="round"/>
+  <path d="M23 32h18" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M32 23v18" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/>
+</svg>

@@ -37,7 +37,7 @@ DSH `pwsh` 的模型可见结果形态（`@deepseek-ai/dsh-tool-pwsh` 与 `@deep
 | 后台/超时会转成 job，输出改由 `job_output` 返回 | `renderPwshPromoted`、`@deepseek-ai/dsh-tool-jobs` |
 | `job_list` 会回显 **命令文本与描述** | `dsh-tool-jobs/lib/index.js`（`job` 结构含 command/description） |
 
-插件现状（实施后）：`GUARDED_TOOLS = {read, grep, pwsh, job_output, job_list}`，源码在仓库内 `plugins/dsh-pii-guard/lib/index.js`、安装于 `E:/Code/dsh_home/plugins/dsh-pii-guard/lib/index.js`（门禁 #5 校验两边一致）。
+插件现状（2026-11-11 修订）：改为**默认全工具结果扫描** —— 黑名单 `SKIP_TOOLS = {job_kill, read_image}`，`read`/`grep`/`pwsh`/`bash`/`job_*` 以及 MCP/PTC/web 等所有工具的文本型结果一律脱敏；`read_image` 另在 PII 预设内用 `agent.ctx.tools.restrict` 隐藏。源码在仓库内 `plugins/dsh-pii-guard/lib/index.js`、安装于 `E:/Code/dsh_home/plugins/dsh-pii-guard/lib/index.js`（门禁 #5 校验两边一致）。写入侧由 `agent/created` scoped shadow 把 `write`/`edit` 参数里的占位符还原回原文后再落盘。
 
 ## 2. 拦截范围（建议）
 
@@ -166,7 +166,7 @@ DSH `pwsh` 的模型可见结果形态（`@deepseek-ai/dsh-tool-pwsh` 与 `@deep
 ### D. 审计与可回退
 
 - 任一绕过路径都能在日志中查到；关闭开关后行为回到当前基线（`pwsh` 透传）；
-- 插件异常（服务崩溃/超时/spawn 失败）仍是"降级透传 + stderr 告警"，不阻塞命令；spawn 失败已补 `error` 事件处理（否则 Node 未处理事件会终止宿主），并由 node 冒烟覆盖。
+- **（2026-11-11 修订）** 插件异常（服务崩溃/超时/spawn 失败）已由「降级透传」改为 **fail-closed 阻断**：返回 `{kind:"block"}` 并附 `[pii-guard]` 说明，绝不放行明文；仅显式 `PII_GUARD_FAIL_OPEN=1` 排障时回退到透传。spawn 失败仍补 `error` 事件处理（否则 Node 未处理事件会终止宿主）；node 冒烟已改为断言阻断。
 - 配置写错（`PII_GUARD_SHELL_ALLOWLIST` 非法正则）时忽略该开关并告警，按"不放行"处理，不会静默关闭拦截。
 - 部署路径可覆盖：`PII_GUARD_PY`（解释器）、`PII_GUARD_REPO`（仓库根）。
 

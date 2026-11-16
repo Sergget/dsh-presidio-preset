@@ -1,5 +1,22 @@
 # 方案 A：PII 工具拦截守护插件 — 实施计划
 
+> **状态（2026-11-16 晚补充）：用户自定义屏蔽词 UI 已落地。**
+> 新 bundle `plugins/dsh-pii-guard-terms` 在设置页注册 `settings.section`（id `pii-guard-terms`），用户自行增删要屏蔽的词/短语；写入 `.pii_presidio_store/user_terms_rules.json`（`entity_type: "USER_TERM"`、字面匹配），由 `preset.json` 的 `config.custom_rules_path` 接线到引擎，靠 `CustomRuleSet.refresh()` 一秒内热更新，无需重启。清空词表写永不匹配占位规则 `(?!)`（空数组会被「0 条时保留旧规则」逻辑吞掉）。详见 [RELEASE-GATE.md](RELEASE-GATE.md) 顶部「本轮新增（2026-11-16，用户自定义屏蔽词 UI）」。
+
+> **状态（2026-11-16 补记）：2026-11-11 之后又修了两条泄漏，当前实现再与以下设计有差异。**
+> (1) `tools/post-execute` 只改 `content` 仍会漏 `meta.lines`（新版 `read` 的 session log / GUI 卡片取 `presentationMeta(value.lines)`，48 行原文）。现新增 `{kind:"accept", value}` 路径：递归脱敏 canonical `result.value` 后由 `pipeline.js createSuccessResult()` 重渲染，模型上下文、`meta` 与卡片一起覆盖；无 PII 时不动 value。
+> (2) 名单型人名（罕见姓、复姓、含「之/同/也」的三字名、带「（26）」学号）曾漏检。现新增独立 `ChineseRosterPersonRecognizer`，只在显式名单链触发，不放松通用人名过滤。
+> 2026-11-16 验证与残留边界见 [RELEASE-GATE.md](RELEASE-GATE.md) 顶部「本轮修复」。以下历史正文保留作决策依据。
+
+> **状态（2026-11-11 补记）：本文件是历史实施计划，保留作决策依据；以下设计与当前实现有差异。**
+> 当前插件：`plugins/dsh-pii-guard/lib/index.js`。接缝已从 `tools/execute` 改为
+> `tools/post-execute`（`tools/execute` 拿到的是 deepFreeze 后的 canonical 结果，原地改
+> content 会 TypeError）。拦截面已从 `read`+`grep` 扩到**默认全工具结果扫描**（黑名单
+> `SKIP_TOOLS`）；第 105/106 行的「pwsh 是已知旁路」「服务异常降级透传」均已解决：pwsh /
+> `job_output` / `job_list` 已纳入，服务异常改为 **fail-closed 阻断**，并新增写入侧
+> `agent/created` scoped shadow 占位符还原、`read_image` 隐藏、`agent/pre-step` 兜底告警。
+> 门禁状态见 [RELEASE-GATE.md](RELEASE-GATE.md)（2026-11-11 全量 12/12 PASS）。
+
 > 目标：把 preset 的「脱敏」从**提示词级自律**升级为**循环内硬性流程**——模型通过
 > `read`/`grep` 等工具读到的文件内容，在进入上下文**之前**被自动脱敏，模型无感、
 > 不可跳过。

@@ -158,7 +158,7 @@ Get-ChildItem dist\*.whl | ForEach-Object {
 | `hook_log.jsonl` | 新增行数、`n_replaced` 分布、`entities` 类型分布、JSON 解析失败行数（只含元数据，不含原文） | 本次观测：81 行中 16 行解析失败（清洗时已丢弃）；若失败行持续增长 → 并发写/截断问题，需排查 |
 | 日志落盘风险 | 日志已改为只存元数据（实体类型/数量、内容指纹、`conv_sha1`/`doc_sha1`）；原文仅在 `sessions.db` | 文件仍须留在 `.gitignore` 内、限制访问；轮转上限 10 MB（超限改名 `hook_log.jsonl.1`） |
 | 延迟 | 大文件 read 的耗时（引擎吞吐约 0.8 MB/s，64 KB 约 88 ms） | 明显变慢 → 检查 Python 服务是否重启/排队 |
-| 插件异常 | DSH 日志中的 `[pii-guard]` stderr 告警、降级透传次数 | 出现即表示守卫未生效，需重启插件并复核 |
+| 插件异常 | DSH 日志中的 `[pii-guard] redact failed, blocking result` 告警与工具结果被 `[pii-guard]` 阻断 | 出现即表示 Python 脱敏服务不可用（fail-closed 已生效，明文未放行）；查 `PII_GUARD_PY` / 服务进程后重启插件。**不要**为此设置 `PII_GUARD_FAIL_OPEN=1` 绕过 |
 | 误伤反馈 | 表格对齐、路径被替换导致命令失败、JSON 仍可解析但值不可回填 | 按 [DECISION-shell-redaction.md](DECISION-shell-redaction.md) 第 4 节的处置口径记录 |
 | 磁盘增长 | `.pii_presidio_store/`（`sessions.db`、映射库、日志） | 设定清理策略 **待定** |
 

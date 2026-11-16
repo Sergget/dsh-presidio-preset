@@ -18,7 +18,7 @@
     "session_scope": "conversation",
     "supported_extensions": [".txt", ".md", ".docx", ".xlsx", ".pptx"],
     "whitelist_path": null,
-    "custom_rules_path": null,
+    "custom_rules_path": ".pii_presidio_store/user_terms_rules.json",
     "rules_reload_interval": 1.0
   },
   "entity_types": [

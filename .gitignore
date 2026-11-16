@@ -25,3 +25,7 @@ dist/
 eval_result.json
 # 评审/取证期临时产物 (脚本、dump 输出、解包源码), 不入库
 .review_tmp/
+# 用户自定义屏蔽词 (由 dsh-pii-guard-terms 设置页写入, 属本机用户数据; 内容可能含真实姓名/项目名)
+.pii_presidio_store/user_terms_rules.json
+# 修复前的备份制品 (含脱敏副本/映射表/验证日志), 仅限本地回溯, 不入库
+.bak-pii-*/

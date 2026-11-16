@@ -1,0 +1,7 @@
+# Bundle patch for dsh-pii-guard-terms.
+# The row id must be unique across every patch layer; the row name is the
+# package whose Host half gets loaded. Keep this row inside the bundle's own
+# patch - writing it into a profile or home patch duplicates the loader id.
+- insert:
+    - id: dsh-pii-guard-terms:terms
+      name: 'dsh-pii-guard-terms'

@@ -2,13 +2,13 @@
 
 为 DeepSeek Harness (DSH) 提供本地可逆 PII 脱敏能力。全程离线，零 spaCy/PyTorch 依赖。
 
-本目录包含**两种集成形态**，适用不同的 DSH 运行时：
+本目录包含**两种集成形态**（另附一份存档的钩子契约定义），适用不同的 DSH 运行时：
 
 | 形态 | 文件 | 适用运行时 | 当前状态 |
 |------|------|-----------|---------|
 | **bundle 声明行 preset**（推荐，唯一正路） | `bundle/package.json` + `bundle/cordis.patch.yml` | dsh 0.2.x（本机实测 0.2.1-rc.5） | ✅ 已装并验证 |
 | 目录式预设（已废弃） | `agent.cordis.yml` + `preset.yml` + `skills/` | 仅旧版 dsh | ⚠️ dsh 0.2.x 不再读取该目录 |
-| 钩子契约入口（存档） | `preset.json` + `hook.py` | 能挂载 Python 钩子的 DSH 运行时 | ⚠️ dsh 0.2.x 不提供该接缝 |
+| 钩子契约入口（存档） | `preset.json` + `hook.py` | 能挂载 Python 钩子的 DSH 运行时 | ⚠️ 接缝仍不提供、该形态不可加载；但同等能力已由 Cordis 插件 `dsh-pii-guard` 实现，不再是唯一方案 |
 
 > **要跑测试？直接看 [`START-HERE.md`](START-HERE.md)** —— 里面有可直接粘贴到新会话的启动提示词，
 > 以及每条约束的实测依据。
@@ -17,26 +17,40 @@
 
 ### 工作原理
 
+主路径是**运行时结果侧强制脱敏**：`dsh-pii-guard` Cordis 插件挂在 `tools/post-execute`
+waterfall 上，默认对所有工具的文本结果在写入 session log 与进入上下文之前强制脱敏，
+模型无感、不可跳过。助手回复里的占位符由 `agent/assistant-stream` 在显示侧还原。
+
 ```
 用户提出敏感文档任务
       │
       ▼
-agent 检测文本/文档含 PII
+agent 正常调用 read / grep / pwsh / job_output / job_list 读取文本
       │
       ▼
-python -m presidio_pii.cli redact <文件>   ← 脱敏发生在 prompt/工具 I/O 之前
-      │                                    （产出 <名>-redacted/ + .mapping.csv）
-      ▼
-用脱敏文本作为工作副本：分析、编辑、送入 LLM 上下文、工具调用
+tools/post-execute waterfall：dsh-pii-guard 对工具文本结果强制脱敏
+（PII → ⟦PII:TYPE:0001⟧），在写入 session log 与进入上下文之前完成
       │
       ▼
-python -m presidio_pii.cli restore <脱敏文件>  ← 无损还原
+模型只看到脱敏副本：分析、编辑、送入 LLM 上下文
       │
       ▼
-验证还原产物与原文一致，交付用户可见输出
+agent/assistant-stream 在显示侧还原占位符 → 用户看到明文
 ```
 
-与透明拦截方案（`preset.json` 钩子）的本质区别：**脱敏是 agent 工作流的一个显式步骤，不是运行时改写请求**。dsh 0.2.x 的 LLM 请求深度冻结（扩展只读），请求改写型钩子没有挂载点；本形态按 dsh 支持的扩展方式实现同等防护目标。
+CLI `redact` / `restore` 是**补充路径**，只用于四类场景：office 二进制格式
+（docx/xlsx/pptx，`read` 拿到的是压缩包字节，守卫识别不到其中 PII）、用户明确要求
+交付还原后的明文、离线批量处理、以及验证 redact → restore 无损。
+
+边界：session log 存的是脱敏后结果，但 `tool/call` 的原始参数仍会落盘；图片通道
+（PII 预设里 `read_image` 已隐藏）、base64 / UTF-16 编码内容与用户直接粘贴进输入框的
+文本不在守卫覆盖内；脱敏服务异常时走 fail-closed，读取被阻断而不是放行明文。
+详见 [`skills/presidio-pii/SKILL.md`](skills/presidio-pii/SKILL.md) 第七节。
+
+与透明拦截方案（`preset.json` 钩子）的关系：旧方案想在 **LLM 请求侧**改写 prompt/响应，
+dsh 0.2.x 的 LLM 请求深度冻结（扩展只读），没有该挂载点。现行方案改在**工具结果侧**
+强制脱敏——是运行时强制改写而非 agent 工作流里的显式步骤，不依赖模型自律；
+同等能力已由 Cordis 插件实现（见下文「钩子契约入口」与 `plugins/dsh-pii-guard/`）。
 
 ### 部署
 
@@ -108,8 +122,10 @@ preset 被标记 `broken`，GUI 显示「加载失败」；`modelSelectionSettin
 
 **限制**：该形态依赖 DSH 运行时提供「LLM 请求前/响应后」Python 钩子接缝。dsh 0.2.x 的
 LLM 请求深度冻结（监听器与适配器只读），且 preset 只接受 cordis 插件声明、不扫描
-`preset.json`，因此该形态在当前 dsh 上不可加载。保留此文件作为钩子契约的规范定义，
-供支持 Python 钩子的运行时或未来 dsh 版本使用。
+`preset.json`，因此该形态在当前 dsh 上仍不可加载。但其目标能力（读取侧强制脱敏、
+助手回复显示侧还原）已由 Cordis 插件在 `tools/post-execute` / `agent/assistant-stream`
+接缝上实现，见仓库 `plugins/dsh-pii-guard/`；该插件是当前主路径，钩子形态不再是唯一方案。
+保留此文件作为钩子契约的规范定义，供支持 Python 钩子的运行时或未来 dsh 版本使用。
 
 ## 识别实体
 
