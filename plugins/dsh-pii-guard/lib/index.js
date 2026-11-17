@@ -38,7 +38,7 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { appendFileSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 const SHELL_TOOLS = new Set(["pwsh", "bash"]);
 const JOB_TOOLS = new Set(["job_output", "job_list"]);
@@ -83,6 +83,46 @@ if (process.env.PII_GUARD_SHELL_ALLOWLIST) {
 }
 const name = "pii-guard";
 const inject = ["tools"];
+
+// 占位符守护提示（症状②防源头）：工具结果被脱敏后，模型手里是 ⟦PII:...⟧ 占位符。
+// 若模型在自己的回答里转写/改写占位符（漏字、换格式），显示层与写入层的还原都会失效，
+// 且终态 assistant 消息固化后回放路径无法再修（内核无终态事件可拦，取证见 2026-11-17）。
+// 因此在 agent 首次产生脱敏映射时，向下一步模型上下文注入一条 notice，明确占位符契约。
+// 每个代理只注入一次（per-agent，不影响 KV cache 稳定性）。
+const PLACEHOLDER_NOTICE_TEXT = [
+  "[pii-guard] 工具结果中出现的 ⟦PII:TYPE:NNNN⟧ 是数据脱敏占位符，不是普通文本。使用规则：",
+  "1) 引用工具结果时必须逐字符保留占位符原样（包括 ⟦ 与 ⟧），不要转写、缩写、改格式或拆分；",
+  "2) 不要猜测占位符代表的内容，也不要为其编造替代文本；",
+  "3) 直接展示给用户时保持原样——界面会自动把占位符还原为原始信息。",
+].join("\n");
+const noticedAgents = new WeakSet();
+function placeholderNotice() {
+  return {
+    role: "user",
+    id: "pii-notice-" + randomUUID(),
+    content: [{ type: "text", text: PLACEHOLDER_NOTICE_TEXT }],
+    source: { kind: "pii-guard", form: "notice", summary: "PII 占位符使用规则" },
+  };
+}
+
+// 路径/参数脱敏豁免：在 Shell 类工具的输出中，跳过 ORGANIZATION 类型的脱敏。
+const isLikelyPath = (text) => (text.includes("/") || text.includes("\\")) && !text.split(/[\s\n]+/).some(w => w.length > 50);
+
+async function redactExempted(text, exec) {
+  const msg = await redact(text);
+  if (exec && SHELL_GUARDED.has(exec.name) && isLikelyPath(text)) {
+    if (msg.map) {
+      for (const [ph, val] of Object.entries(msg.map)) {
+        if (ph.includes("ORGANIZATION")) {
+          msg.redacted = msg.redacted.replace(ph, val);
+          delete msg.map[ph];
+        }
+      }
+    }
+  }
+  // 确保返回 msg 结构符合后续预期
+  return msg || { redacted: text, map: {} };
+}
 
 let svc = null;
 let seq = 0;
@@ -360,7 +400,7 @@ export async function apply(ctx, deps = {}) {
             });
             continue;
           }
-          const msg = await redactFn(text);
+          const msg = await redactExempted(text, exec);
           if (msg.map && typeof msg.map === "object") {
             for (const [ph, val] of Object.entries(msg.map)) {
               phMap.set(ph, displayValue(ph, val));  // 显示侧还原（mask 语义在 Node 侧）
@@ -387,10 +427,26 @@ export async function apply(ctx, deps = {}) {
             kind: "accept",
             value: redactValueLeaves(result.value, pairs),
           };
-          if (decision?.additionalContexts !== undefined) {
+          // 症状②防源头：本代理首次产生映射时，向下一步注入占位符使用规则。
+          if (exec.agent && !noticedAgents.has(exec.agent)) {
+            noticedAgents.add(exec.agent);
+            out.additionalContexts = [placeholderNotice(),
+              ...(decision?.additionalContexts ?? [])];
+          } else if (decision?.additionalContexts !== undefined) {
             out.additionalContexts = decision.additionalContexts;
           }
           return out;
+        }
+        // content 路径（无 meta/value 的工具）同样注入（首次产生映射时）。
+        if (pairs.length > 0 && exec.agent && !noticedAgents.has(exec.agent)) {
+          noticedAgents.add(exec.agent);
+          return {
+            ...decision,
+            kind: "accept",
+            content,
+            additionalContexts: [placeholderNotice(),
+              ...(decision?.additionalContexts ?? [])],
+          };
         }
         return {
           ...decision,
