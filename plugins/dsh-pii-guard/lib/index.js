@@ -377,14 +377,21 @@ export async function apply(ctx, deps = {}) {
         };
       }
       const source = decision?.content ?? result?.content;
-      // 乱码/编码纠错提示
-      if (source && Array.isArray(source) && source.some(b => b?.type === "text" && (b.text.includes("\ufffd") || b.text.includes("\u0000")))) {
-        content.push({ type: "text", text: "\n[pii-guard] 检测到输出含有乱码（GBK/UTF-8 编码错乱），这可能导致模型无法正确识别内容。建议改用 `read` 工具，或使用 `python -X utf8` 运行脚本。" });
-      }
       // 没有文本型 content 就无需脱敏（纯结构化/二进制结果）
       if (!Array.isArray(source) || !source.some((b) => b?.type === "text" && typeof b.text === "string")) return decision;
       try {
         const content = [];
+        // 乱码/编码纠错提示（仅对正常文本——非文本输出由 non-text 标记另行说明）
+        if (source.some((b) => b?.type === "text" && typeof b.text === "string" && isText(b.text) && (b.text.includes("\ufffd") || b.text.includes("\u0000")))) {
+          content.push({ type: "text", text: "\n[pii-guard] 检测到输出含有乱码（GBK/UTF-8 编码错乱），这可能导致模型无法正确识别内容。建议改用 `read` 工具，或使用 `python -X utf8` 运行脚本。" });
+        }
+        // office 二进制命令级强约束：pwsh/bash 命令里直接引用 docx/xlsx/pptx 时告警
+        if (SHELL_GUARDED.has(exec.name)) {
+          const cmd = String(exec?.args?.command ?? "");
+          if (/\.(docx|xlsx|pptx|doc|xls|ppt)\b/i.test(cmd)) {
+            content.push({ type: "text", text: "\n[pii-guard] 警告：shell 命令直接引用了 office 二进制文档。这是乱码与脱敏绕过的主要来源——请改用 `read` 工具读取（自带脱敏），或先用 `python -X utf8` + python-docx/openpyxl 转出 Markdown/文本后再读。详见 docs/WORKFLOW-GUIDE.md。" });
+          }
+        }
         const pairs = []; // [占位符, 原文]：本次脱敏得到的映射，用于同源改 canonical value
         for (const block of source) {
           if (block?.type !== "text" || typeof block.text !== "string") {

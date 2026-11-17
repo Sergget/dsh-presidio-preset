@@ -374,6 +374,19 @@ async function runTool(tool, text, opts = {}) {
         JSON.stringify(res4.additionalContexts ?? null));
 }
 
+
+// 20. office 命令级告警：pwsh 命令引用 docx 时追加 WORKFLOW-GUIDE 提示
+{
+  const res = await runTool("pwsh", "plain output", { args: { command: "python parse.py report.docx" } });
+  const out = res.content.map(b => b.text || "").join("\n");
+  check("office 命令告警注入",
+        out.includes("office") && out.includes("WORKFLOW-GUIDE"), out);
+  const res2 = await runTool("pwsh", "plain output 2", { args: { command: "Get-Date" } });
+  const out2 = res2.content.map(b => b.text || "").join("\n");
+  check("非 office 命令不告警",
+        !out2.includes("WORKFLOW-GUIDE"), out2);
+}
+
 function byteLength(s) {
   return Buffer.byteLength(s, "utf8");
 }
