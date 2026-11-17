@@ -18,7 +18,7 @@
 | 5 | 格式覆盖面 | PASS（文本类 + pwsh 前台 + job_output/job_list） |
 | 6 | 依赖漏洞 | FAIL（2026-11-16 复核：环境 `opentelemetry-api 1.45.1` 报 `CVE-2026-126360`，修法 1.45.2；与本轮代码无关，见 §6） |
 | 7 | 密钥扫描（工作树 + 历史） | PASS |
-| 8 | 单元测试套件 | PASS（2026-11-16：222 passed，含用户屏蔽词 9 条） |
+| 8 | 单元测试套件 | PASS（2026-11-16：222 passed，含用户屏蔽词 9 条；深夜 FP 修复后 228 passed） |
 | 9 | 可复现安装（wheel + 干净环境） | PASS |
 | 10 | 源码可溯源（origin 含 HEAD / 产物清单） | PASS（A：origin 已含 HEAD，2026-11-10 推送） |
 | 11 | 仓库不落真实 PII / 映射库 | PASS |
@@ -38,6 +38,10 @@
 > 另记：本轮验证全程在 `pwsh` 工具的 Windows Job runner 故障（`0xC0000142`）下通过 Playwright server 的 `windowsHide:true` 子进程通道完成；`pwsh`/`glob`/`grep` 工具本身不可用，不影响产物结论。
 
 > **复核结论（2026-11-16 晚，用户自定义屏蔽词 UI 落地后全量门禁）**：`python tools/release_gate.py --json C:/Users/sergg/AppData/Local/Temp/pii_gate_run2/gate.json` → **PASS 11 / FAIL 1 / SKIP 0 / MANUAL 0（157.1s）**。#1/#2/#3/#4/#5/#7/#8/#9/#10/#11/#12 全 PASS；#5 新增 `terms=ok; terms_wiring=ok(.pii_presidio_store/user_terms_rules.json)`；#8 **222 passed in 13.53s**；#9 wheel 两次构建仍字节一致（`3ce8d89dbdf81293…`，61357B，`reproducible=True`）。**唯一 FAIL 仍是 #6 依赖漏洞**，且仍是环境级 `opentelemetry-api 1.45.1` → `CVE-2026-126360`（fix 1.45.2），与本轮改动无关；本轮未升级该全局包。另：本轮 `pwsh`/`glob`/`grep` 工具持续故障（`Windows Job runner exited with exit code 3221225794` / `ripgrep provider failure`），全部验证经 Playwright server 的 `windowsHide:true` 子进程通道完成。
+
+> **FP 修复（2026-11-16 深夜，教体局汇报会话误脱敏）**：会话 `session-50aeeb15` 读 docx 时「荣获/余人/阳光/文明」被误判 PERSON。根因两条：jieba 词典把高频常用词误标 `nr`（宋庆龄 freq 227 < 文明 6584，freq 阈值不可行），nr 分支与回退分支均放行；回退分支 `_left_context_ok` 对数字前驱直接放行（「8300余人」）。修法：`_PERSON_STOPWORDS` 扩 36 词（只收明确非人名高频词）；`_left_context_ok` 对 ASCII 数字/字母前驱与 `_DIGIT_PREFIX`（余万多几成）显式拒绝；回退分支 3 字窗口前 2 字命中停用词则拒；`_PRE_NAME_CHARS` 补「获」修 FN（「荣获宋庆龄奖学金」）。真实 docx 复扫实体 29→20、FP 清零；`228 passed`，门禁 #5 PASS。无 jieba 双模式新增 1 个既有点（宋庆龄退化为宋庆，TEST-MATRIX 已补记）。
+
+> **症状②修复（2026-11-17 凌晨，助手答案残留占位符）**：会话存档统计 272 处占位符（tool/result 180 + assistant/message 92），其中 46 处在终态 assistant text/reasoning —— 模型把工具结果里的占位符复述进自己的回答。实时流经 assistant-stream 显示还原（`plugin_display.mjs` 覆盖），但**终态 assistant 消息固化的是模型原始输出**（内核 `dsh-agent-loop` `assistant/message` 直接 `session.append`，无终态事件可拦；回放路径不走 stream），GUI 重开/回放时看到占位符。插件层修法 = 防源头：`tools/post-execute` 里 agent 首次产生脱敏映射时，注入一条 additionalContext（官方范式 `dsh-repeat-tool-reminder`，shape `{role:"user", id, content:[{type,text}], source:{kind:"pii-guard", form:"notice"}}`），内容为占位符三条使用规则（逐字符保留/不猜测/展示保持原样）；`noticedAgents` WeakSet 保证每代理只注入一次（保护 KV cache）。注意边界：注入只对新会话生效，且**已固化的历史消息无法追溯修复**（需内核支持终态事件才能根治）。验证：`plugin_jobs.mjs` 28 条 ALL PASS（新增 4 条 notice 用例）、228 pytest、门禁 #5 PASS（`installed_sync=ok`，sha `e2f32501…`）。
 
 > **最终复核（2026-11-11，v0.2 强化后）**：`python tools/release_gate.py --json $env:TEMP\pii_gate_full.json` → **PASS 12 / FAIL 0 / SKIP 0 / MANUAL 0，退出码 0**（622.0s）。#1 引擎层 12 处替换、`#3` 三格式逐字还原、`#5` 仓库/安装插件 sha256 一致 + 21 条 JS 冒烟全过、`#6` pip-audit 0、`#8` **175 passed**、`#9` 两次构建字节一致（`63a3b1eb…08a`，59489B）、`#12` 外部语料全无损，均在正常环境实测通过。证据：`C:\Users\sergg\AppData\Local\Temp\pii_gate_full.json`。
 > 本轮变更：拆掉 persona 五步 CLI 双轨；插件改为默认全工具结果扫描 + fail-closed；新增写入侧 scoped shadow 占位符还原、`read_image` 隐藏、`agent/pre-step` 兜底告警；修复末尾手机号漏检（15 条新回归用例）。
@@ -148,7 +152,7 @@
 ## 8. 单元测试套件
 
 - [x] **判定标准**：`pytest -q` 全绿，无 skip 掩盖失败。
-- **当前状态**：PASS —— `213 passed`（2026-11-16 `D:\Python\313\python.exe -m pytest -q --no-header`；含 `tests/test_roster_person.py` 37 条名单识别/负样本/无 jieba 用例、`test_common_words_are_not_pii` 新增 1 条名单泛称负样本；基线 175 → 212 → 213）
+- **当前状态**：PASS —— `228 passed`（2026-11-16 深夜 `D:\Python\313\python.exe -m pytest -q --no-header`；含 `tests/test_roster_person.py` 37 条名单识别/负样本/无 jieba 用例、`test_common_words_are_not_pii` 名单泛称负样本与「荣获/余人/阳光/文明/万人」FP 修复负样本（2026-11-16 晚间第二轮）、`test_person_in_natural_context` 新增「荣获宋庆龄」FN 正向；基线 175 → 212 → 213 → 222 → 228）
 - **证据位置**：`tests/`（`test_engine.py`、`test_flow.py`、`test_structures.py`、`test_variants.py`、`test_custom_rules.py`、`test_shell_redaction.py`、`test_phone_last_in_list.py`、`test_roster_person.py`）；`C:\Users\sergg\AppData\Local\Temp\pii_verify_leak\verify3_result.json`
 
 ## 9. 可复现安装

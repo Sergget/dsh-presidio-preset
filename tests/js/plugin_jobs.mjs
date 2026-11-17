@@ -324,6 +324,56 @@ async function runTool(tool, text, opts = {}) {
         JSON.stringify(res) + " | " + warned);
 }
 
+// 17-19. 占位符守护提示（症状②防源头）：首次产生映射的 agent 收到 additionalContexts notice
+{
+  const agentA = { ctx: {} };
+  const agentB = { ctx: {} };
+  // 17. 首次：value 路径（read 含 meta/value 且非 shell），映射产生 → additionalContexts 含 notice
+  const res1 = await handler(
+    { name: "read", args: {}, agent: agentA },
+    { content: [{ type: "text", text: "张伟 13800138000" }], meta: { lines: [] }, value: { a: "张伟 13800138000" } },
+    async () => ({ kind: "accept", map: { "⟦PII:PERSON:1⟧": "张伟", "⟦PII:PHONE_NUMBER:1⟧": "13800138000" } }),
+  );
+  check("首次映射注入 notice（value 路径）",
+        Array.isArray(res1.additionalContexts) && res1.additionalContexts.length === 1
+        && res1.additionalContexts[0].source?.kind === "pii-guard"
+        && res1.additionalContexts[0].source?.form === "notice"
+        && res1.additionalContexts[0].content?.[0]?.text.includes("⟦PII:"),
+        JSON.stringify(res1.additionalContexts ?? null));
+  check("notice 仍是 value 重渲染且不带 content",
+        Object.hasOwn(res1, "value") && !Object.hasOwn(res1, "content")
+        && JSON.stringify(res1.value ?? null).includes("⟦PII:PERSON:"),
+        JSON.stringify(res1.value ?? null));
+  // 18. 同一 agent 第二次：不再注入
+  const res2 = await handler(
+    { name: "job_output", args: {}, agent: agentA },
+    { content: [{ type: "text", text: "张伟再次出现" }] },
+    async () => ({ kind: "accept" }),
+  );
+  check("同 agent 第二次不重复注入",
+        res2.additionalContexts === undefined && res2.content?.[0]?.text.includes("⟦PII:PERSON:"),
+        JSON.stringify(res2.additionalContexts ?? null));
+  // 19. 另一个 agent：各自注入一次
+  const res3 = await handler(
+    { name: "job_output", args: {}, agent: agentB },
+    { content: [{ type: "text", text: "张伟 in B" }] },
+    async () => ({ kind: "accept" }),
+  );
+  check("不同 agent 各自注入一次",
+        Array.isArray(res3.additionalContexts) && res3.additionalContexts.length === 1
+        && res3.additionalContexts[0].source?.kind === "pii-guard",
+        JSON.stringify(res3.additionalContexts ?? null));
+  // 19b. 无映射的工具结果不注入
+  const res4 = await handler(
+    { name: "job_output", args: {}, agent: { ctx: {} } },
+    { content: [{ type: "text", text: "干净文本 no pii" }] },
+    async () => ({ kind: "accept" }),
+  );
+  check("无映射不注入 notice",
+        res4.additionalContexts === undefined && res4.content?.[0]?.text === "干净文本 no pii",
+        JSON.stringify(res4.additionalContexts ?? null));
+}
+
 function byteLength(s) {
   return Buffer.byteLength(s, "utf8");
 }

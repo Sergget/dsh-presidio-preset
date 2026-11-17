@@ -108,8 +108,9 @@ function placeholderNotice() {
 // 路径/参数脱敏豁免：在 Shell 类工具的输出中，跳过 ORGANIZATION 类型的脱敏。
 const isLikelyPath = (text) => (text.includes("/") || text.includes("\\")) && !text.split(/[\s\n]+/).some(w => w.length > 50);
 
-async function redactExempted(text, exec) {
-  const msg = await redact(text);
+async function redactExempted(text, exec, redactFn) {
+  const fn = redactFn ?? redact;
+  const msg = await fn(text);
   if (exec && SHELL_GUARDED.has(exec.name) && isLikelyPath(text)) {
     if (msg.map) {
       for (const [ph, val] of Object.entries(msg.map)) {
@@ -376,6 +377,10 @@ export async function apply(ctx, deps = {}) {
         };
       }
       const source = decision?.content ?? result?.content;
+      // 乱码/编码纠错提示
+      if (source && Array.isArray(source) && source.some(b => b?.type === "text" && (b.text.includes("\ufffd") || b.text.includes("\u0000")))) {
+        content.push({ type: "text", text: "\n[pii-guard] 检测到输出含有乱码（GBK/UTF-8 编码错乱），这可能导致模型无法正确识别内容。建议改用 `read` 工具，或使用 `python -X utf8` 运行脚本。" });
+      }
       // 没有文本型 content 就无需脱敏（纯结构化/二进制结果）
       if (!Array.isArray(source) || !source.some((b) => b?.type === "text" && typeof b.text === "string")) return decision;
       try {
@@ -400,7 +405,7 @@ export async function apply(ctx, deps = {}) {
             });
             continue;
           }
-          const msg = await redactExempted(text, exec);
+          const msg = await redactExempted(text, exec, redactFn);
           if (msg.map && typeof msg.map === "object") {
             for (const [ph, val] of Object.entries(msg.map)) {
               phMap.set(ph, displayValue(ph, val));  // 显示侧还原（mask 语义在 Node 侧）

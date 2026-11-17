@@ -1,7 +1,7 @@
 {
   "name": "presidio-pii",
   "version": "0.1.0",
-  "description": "Local reversible PII redaction for DeepSeek Harness: redacts Chinese PII before prompts leave the harness, restores placeholders after the LLM responds.",
+  "description": "Local reversible PII redaction for DeepSeek Harness: redacts Chinese PII before prompts leave the harness, restores placeholders after the LLM responds. NOTE: For office documents (docx/xlsx), use the `read` tool or explicit CLI redaction (`python -m presidio_pii.cli redact <file>`); DO NOT use `pwsh` or manual Python scripts to parse them.",
   "entrypoint": "hook.py",
   "hooks": {
     "on_before_llm": {

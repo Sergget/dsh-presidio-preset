@@ -121,6 +121,12 @@ def test_job_title():
     # 名单型识别器新增后的精度闸门: 带「名单：」引导词 + 顿号链，
     # 但内容是证件/信息类型泛称，不得被当成姓名链（agent.md:83）。
     "名单：身份证、手机号、银行卡、人名等个人信息。",
+    # 2026-11-16 教体局汇报 FP 修复: jieba nr 误标词 + 数字前驱数量表达
+    "我校学生在比赛中荣获佳绩",
+    "全市共有德育工作者8300余人",
+    "阳光总在风雨后",
+    "精神文明建设持续推进",
+    "万人参会",
 ])
 def test_common_words_are_not_pii(text):
     assert _all_entities(text) == {}, text
@@ -133,6 +139,8 @@ def test_common_words_are_not_pii(text):
     ("联系人：高鹏", "高鹏"),
     ("马晓东、宋佳参加评审", "马晓东"),
     ("客户张伟, 身份证 110101199003077890", "张伟"),
+    # 2026-11-16 FN 修复: 「荣获宋庆龄奖学金」中真名因前驱「获」被拒
+    ("2名学生荣获宋庆龄奖学金", "宋庆龄"),
 ])
 def test_person_in_natural_context(text, name):
     ents = _all_entities(text)
