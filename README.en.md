@@ -19,6 +19,61 @@ A local, lightweight, reversible PII (Personally Identifiable Information) de-id
 - **Wide Format Coverage**: redact/restore for `.docx` (paragraphs, tables, headers/footers, text boxes, comments, tracked changes, footnotes), `.xlsx` (cells and cell comments), `.pptx` (text frames, tables, notes), plus `.txt`, `.md`, `.csv`, `.json`, `.xml`, `.html`, `.eml`, `.rtf`. `.pdf`, `.doc` and `.xls` are detection-only — they can be scanned but not written back.
 - **Whitelist**: protect specific keywords — `--whitelist FILE` (one term per line) or `--keep TERM` on the CLI, `PII_DSH_WHITELIST` for the DSH preset. Any detected entity that overlaps a protected term is left untouched.
 
+## Installation & Deployment
+
+> **Secure default (fail-closed)**: when the redaction service (Python side) fails, the guard plugin **blocks the affected tool call by default** rather than passing raw text through — temporarily unavailable is preferable to leaking PII. The settings page's "Fail open (troubleshooting only)" switch lets raw text through on service errors; it **significantly weakens protection** and should be turned off as soon as troubleshooting ends.
+
+**Python versions**: **3.9 / 3.10 / 3.11 / 3.12 / 3.13** are supported (`pyproject.toml` declares `requires-python = ">=3.9"`). Check before installing:
+
+```powershell
+python --version   # must be 3.9~3.13
+```
+
+### One-shot install (recommended)
+
+```powershell
+# -Repo defaults to the script's directory, -DshHome defaults to $env:DSH_HOME
+pwsh -NoProfile -File tools/install.ps1 -Repo . -DshHome $env:DSH_HOME
+
+# Preview actions without writing anything
+pwsh -NoProfile -File tools/install.ps1 -Repo . -DshHome $env:DSH_HOME -DryRun
+```
+
+The script substitutes the `__REPO__`/`__DSH_HOME__` placeholders in the `cordis.patch.yml` template with real paths and installs the guard plugin to `<DSH_HOME>/plugins/dsh-pii-guard/lib/index.js`. After installing, confirm inside a **DSH session** (not plain PowerShell) that `@local/dsh-presidio-pii-preset` and `dsh-pii-guard-terms` are enabled via `plugin_manager list_bundles`, then **fully restart DSH**.
+
+> `bundle patch` is injected via `link` and does **not** write plugin entries into the profile patch file — not finding them by grepping profile config is expected. Use `plugin_manager list_bundles` to verify.
+
+### Offline install (no network / intranet)
+
+`release/` ships a prebuilt wheel (hash in the sibling manifest), so no heavy PyPI dependencies are needed:
+
+```powershell
+pip install --no-index --find-links release presidio_pii_dsh-0.1.0-py3-none-any.whl
+```
+
+### Post-install verification
+
+```powershell
+pwsh -NoProfile -File tools/verify_install.ps1 -Repo . -DshHome $env:DSH_HOME
+```
+
+Checks Python import, CLI demo, bundle enablement, plugin byte-identity and path drift. The `bundle enabled` item shows SKIP (with in-DSH verification guidance) when run in a shell without the `plugin_manager` command — this is not a failure.
+
+### Network / git / SSL troubleshooting
+
+If `git clone` or `pip install` fails on network or certificate errors:
+
+1. Check proxy and CA chain: `git config --global http.sslVerify`; corporate networks may need `http.proxy` / `https.proxy` or a trusted CA certificate.
+2. Bypass git: download the **zip archive** from the Release page or internal mirror, extract, then follow the one-shot install — the script does not depend on git.
+3. Bypass PyPI: use the offline install above with the wheel in `release/`.
+
+### Manual install (without the script)
+
+1. `pip install -e .` (or the offline wheel).
+2. Replace the `__REPO__`/`__DSH_HOME__` placeholders in `cordis.patch.yml` manually.
+3. Copy `plugins/dsh-pii-guard/lib/index.js` to `<DSH_HOME>/plugins/dsh-pii-guard/lib/index.js`.
+4. In a DSH session, `plugin_manager install_bundle` the preset bundle and `plugins/dsh-pii-guard-terms`, then restart DSH.
+
 ## Quick Start
 
 ```bash
@@ -124,15 +179,24 @@ See [tools/README.md](tools/README.md) for details.
 - **`docs/RESEARCH-pii-protection.md`**: research charter (not yet implemented) — recognizer-level rule
   libraries × channel-level minimal tool surface, with measured field coverage, a read-channel inventory
   and a 73-item issue list.
+- **`docs/SECURITY-NOTES.md`**: security boundaries and known risks — CLI plaintext mappings, `.py` rules
+  executed via import, local database layout, known blind spots. **Read before deployment.**
 - **`.agent-presets/presidio-pii/`**: DeepSeek Harness (DSH) agent preset integration — two
   forms coexist:
-  - `preset.json` + `hook.py`: the hook-contract entry (before_llm / after_llm). This
-    form targets a DSH runtime that mounts Python hooks; current dsh 0.2.x does not
-    provide that seam, so it is **not loadable as-is** on dsh 0.2.x.
-  - `agent.cordis.yml` + `preset.yml` + `skills/presidio-pii/SKILL.md`: the standard
-    cordis preset, compatible with dsh 0.2.x. It enforces a redact-first workflow
-    (CLI redaction before any prompt/tool I/O, lossless restore after), verified
-    against dsh 0.2.1-rc.5.
+  - **`bundle/cordis.patch.yml` (authoritative source)**: the preset patch actually loaded by
+    dsh 0.2.x — plugin list, tool switches and persona prefix all live here. Change this file
+    only when changing preset behavior. It ships as a template with `__REPO__`/`__DSH_HOME__`
+    placeholders, materialized by `tools/install.ps1`.
+  - `agent.cordis.yml` + `preset.yml` + `skills/presidio-pii/SKILL.md`: **legacy** form, kept
+    only for historical reference and older harness versions. dsh 0.2.x does not read
+    `agent.cordis.yml` and it is no longer synced with the bundle (missing `pii-guard`,
+    `tool-jobs`, `tool-schedule` entries). **Do not treat it as a config source** — edits there
+    have no effect.
+  - `preset.json` + `hook.py`: **DEPRECATED hook contract** (before_llm / after_llm). dsh 0.2.x
+    does not mount Python hooks, so those callbacks never fire. `preset.json` itself is still
+    a **live config source**: `entity_types`, `config.whitelist_path` and
+    `config.custom_rules_path` are read by `presidio_pii/hooks.py` and written by the settings
+    UI — do not delete it. The active redaction seam is the `dsh-pii-guard` runtime plugin.
 - **`plugins/dsh-pii-guard/lib/index.js`**: DSH `tools/post-execute` interception plugin
   (read/grep/pwsh/job_output/job_list). The installed copy lives at
   `<DSH_HOME>/plugins/dsh-pii-guard/lib/index.js` and must stay byte-identical

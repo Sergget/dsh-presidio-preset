@@ -146,5 +146,30 @@ const PH = (n) => `\u27E6PII:PERSON:${String(n).padStart(4, "0")}\u27E7`;
   check("缓存命中不重复 IPC", after - before <= 1, `before=${before} after=${after}`);
 }
 
+// S3 回归：config.repo 必须覆盖 env PII_GUARD_REPO（与 terms 的 resolveRepo 对齐）。
+// 重新加载一份插件模块（独立实例），只传 config.repo 指向第二个临时仓库，
+// env 仍指向 repoTmp；若 guard 仍只认 env，就会读错文件、off 模式不生效。
+{
+  const repo2 = mkdtempSync(join(tmpdir(), "pii-s3-repo-"));
+  const store2 = join(repo2, ".pii_presidio_store");
+  mkdirSync(store2, { recursive: true });
+  const settings2 = join(store2, "guard-settings.json");
+  writeFileSync(settings2, JSON.stringify({ displayMode: "off" }), "utf8");
+
+  const copy2 = join(mkdtempSync(join(tmpdir(), "pii-s3-plugin-")), "plugin.mjs");
+  copyFileSync(pluginPath, copy2);
+  const { apply: apply2 } = await import(pathToFileURL(copy2).href + `?s3=${Date.now()}`);
+  const handlers2 = {};
+  await apply2({ on: (evt, fn) => { handlers2[evt] = fn; } }, {
+    repo: repo2.replaceAll("\\", "/"),
+    restore: async (t) => t,
+  });
+  const stream2 = handlers2["agent/assistant-stream"];
+  const f = chunk("S3 前缀 ⟦PII:PE", 0);
+  stream2({ agent: { session: { id: "s-s3" } }, frame: f });
+  check("S3 config.repo 覆盖 env（guard 读新路径 off 设置）", f.chunk.text.includes("PII:PE"), `visible=${JSON.stringify(f.chunk.text)}`);
+  rmSync(repo2, { recursive: true, force: true });
+}
+
 rmSync(repoTmp, { recursive: true, force: true });
 process.exit(failed ? 1 : 0);

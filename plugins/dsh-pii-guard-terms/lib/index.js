@@ -23,6 +23,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 
 export const name = 'dsh-pii-guard-terms';
@@ -42,11 +43,31 @@ const API_PRESET_SAVE = '/api/dsh-pii-guard/preset/save';
  * including the one `warnIfPathDrift` resolves preset-relative paths against —
  * follows this value, so moving the checkout moves the whole config surface.
  */
-const DEFAULT_REPO = 'E:/Code/dsh-presidio-preset';
+// FIX-1: 默认兜底不再写死作者路径，改为从 import.meta.url 推断仓库候选。
+//   本插件位于 <root>/plugins/dsh-pii-guard-terms/lib/index.js；从 lib 目录向上三级
+//   才是 root（lib -> dsh-pii-guard-terms -> plugins -> root）。部署态 root 是 DSH_HOME
+//   （无 presidio_pii/server.py），仓库态则是仓库根（含 presidio_pii/server.py）。
+//   用该哨兵文件区分：命中则返回仓库根；否则返回空串并由调用方告警要求显式配置。
+function inferRepoFromModule() {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const candidate = resolve(here, '..', '..', '..');
+    return existsSync(resolve(candidate, 'presidio_pii', 'server.py'))
+      ? candidate.replace(/\\/g, '/').replace(/\/+$/, '')
+      : '';
+  } catch {
+    return '';
+  }
+}
+const DEFAULT_REPO = inferRepoFromModule();
 function resolveRepo(rawConfig) {
   const fromConfig = typeof rawConfig?.repo === 'string' ? rawConfig.repo.trim() : '';
   const fromEnv = typeof process.env.PII_GUARD_REPO === 'string' ? process.env.PII_GUARD_REPO.trim() : '';
-  return (fromConfig || fromEnv || DEFAULT_REPO).replace(/\\/g, '/').replace(/\/+$/, '');
+  const resolved = (fromConfig || fromEnv || DEFAULT_REPO).replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!resolved) {
+    console.error('[dsh-pii-guard-terms] 无法确定仓库根：请配置 bundle config.repo 或环境变量 PII_GUARD_REPO（默认推断失败，插件部署在 DSH_HOME 时无法自动定位仓库）。');
+  }
+  return resolved;
 }
 const DEFAULT_TERMS_FILE = '/.pii_presidio_store/user_terms_rules.json';
 const DEFAULT_SETTINGS_FILE = '/.pii_presidio_store/guard-settings.json';

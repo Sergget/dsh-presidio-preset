@@ -231,7 +231,12 @@ def DISPLAY_MODE_SUPPORTED(src: str) -> bool:
 # --------------------------------------------------------------------------- #
 # 5. 格式覆盖面（文本类由 #1/#3 覆盖；pwsh 已按 P1-全纳入）
 # --------------------------------------------------------------------------- #
-PLUGIN = Path(r"E:/Code/dsh_home/plugins/dsh-pii-guard/lib/index.js")
+# FIX-1: 已安装插件路径不再写死作者路径，改由 DSH_HOME 环境变量推断。
+# 未配置时留空：下方安装的 sha 比对会走 installed_sync=missing -> SKIP 分支，
+# 仓库副本本身仍独立校验，不降低门禁判定口径。
+_DSH_HOME = os.environ.get("DSH_HOME", "").strip()
+PLUGIN = (Path(_DSH_HOME) / "plugins" / "dsh-pii-guard" / "lib" / "index.js"
+          if _DSH_HOME else Path(""))
 PLUGIN_SRC = REPO / "plugins" / "dsh-pii-guard" / "lib" / "index.js"
 
 

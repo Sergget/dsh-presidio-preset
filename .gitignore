@@ -29,3 +29,6 @@ eval_result.json
 .pii_presidio_store/user_terms_rules.json
 # 修复前的备份制品 (含脱敏副本/映射表/验证日志), 仅限本地回溯, 不入库
 .bak-pii-*/
+# install.ps1 生成的 bundle patch 安装产物 (含本机绝对路径占位符替换值), 不入库;
+# 配置源仍是同目录不含绝对路径的 cordis.patch.yml 模板
+cordis.patch.yml.installed

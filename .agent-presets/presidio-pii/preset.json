@@ -1,7 +1,8 @@
 {
   "name": "presidio-pii",
   "version": "0.1.0",
-  "description": "Local reversible PII redaction for DeepSeek Harness: redacts Chinese PII before prompts leave the harness, restores placeholders after the LLM responds. NOTE: For office documents (docx/xlsx), use the `read` tool or explicit CLI redaction (`python -m presidio_pii.cli redact <file>`); DO NOT use `pwsh` or manual Python scripts to parse them.",
+  "description": "Local reversible PII redaction for DeepSeek Harness: redacts Chinese PII before prompts leave the harness, restores placeholders after the LLM responds. NOTE: For office documents (docx/xlsx), use the `read` tool or explicit CLI redaction (`python -m presidio_pii.cli redact <file>`); DO NOT use `pwsh` or manual Python scripts to parse them. DEPRECATED (DSH 0.2.x): the entrypoint/hooks block below is a legacy contract — dsh 0.2.x does NOT mount Python hooks, so on_before_llm/on_after_llm never fire. The mechanism that actually runs is the runtime plugin `dsh-pii-guard` (tools/post-execute seam), installed at <DSH_HOME>/plugins/dsh-pii-guard/lib/index.js. This preset.json is STILL a live config source: entity_types and config.whitelist_path/custom_rules_path are read by presidio_pii/hooks.py and written by the settings UI. Do NOT delete this file.",
+  "_deprecated_hooks_notice": "DSH 0.2.x does not mount Python hooks. entrypoint + hooks are retained only for legacy harness compatibility and are inert. See plugins/dsh-pii-guard/lib/index.js for the active seam. entity_types/config below remain live.",
   "entrypoint": "hook.py",
   "hooks": {
     "on_before_llm": {

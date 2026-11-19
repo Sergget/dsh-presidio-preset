@@ -8,6 +8,7 @@
   - #8  entity_types 白名单：过滤生效、空集表示全开、自定义规则不受限
   - #15 journal 指纹：HMAC 而非裸 SHA256，换密钥指纹变化
   - #16 映射库权限：文件存在且可读写（加固失败不应破坏可用性）
+  - S12 HMAC 密钥文件落盘/复用时都调用 _harden 收紧 ACL（不再只 chmod）
 """
 import hashlib
 import os
@@ -18,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from presidio_pii.chinese_recognizers import RecognizerResult  # noqa: E402
 from presidio_pii.db import SessionRegistry  # noqa: E402
 from presidio_pii.engine import PresidioPIIEngine  # noqa: E402
 
@@ -84,10 +86,25 @@ class EntityTypesFilterTest(unittest.TestCase):
         self.assertEqual(self._types(entity_types=[]), self._types())
 
     def test_filter_runs_before_overlap_resolution(self):
-        """关掉 LOCATION 后，该区间的 ORGANIZATION 仍应能被识别。"""
+        """过滤必须发生在重叠消解之前：被关掉的长实体不能先把保留的短实体吃掉。
+
+        不依赖真实文本语料（原实现的 TEXT 里根本没有 ORGANIZATION，旧断言
+        `found <= {"ORGANIZATION"}` 在空集上也恒真），而是直接注入两段完全
+        重叠、类型不同的RecognizerResult：LOCATION(0,10) 与 ORGANIZATION(0,5)。
+        两者等起点时「更长者优先」，若先消解再过滤，LOCATION 会先吞掉
+        ORGANIZATION，过滤后只剩 LOCATION（被关掉的类型）→ 结果为空。
+        先过滤后消解则 ORGANIZATION 保留。
+        """
         engine = PresidioPIIEngine(db_path=":memory:", entity_types=["ORGANIZATION"])
-        found = {r.entity_type for r in engine.analyze(self.TEXT)}
-        self.assertTrue(found <= {"ORGANIZATION"}, found)
+        results = [
+            RecognizerResult(0, 10, "LOCATION", 0.95),
+            RecognizerResult(0, 5, "ORGANIZATION", 0.80),
+        ]
+        filtered = engine._filter_entity_types(results)
+        self.assertEqual([r.entity_type for r in filtered], ["ORGANIZATION"])
+        resolved = engine._resolve_overlaps(filtered, engine._prio)
+        self.assertEqual([r.entity_type for r in resolved], ["ORGANIZATION"])
+        self.assertEqual((resolved[0].start, resolved[0].end), (0, 5))
 
     def test_set_entity_types_applies_next_call(self):
         engine = PresidioPIIEngine(db_path=":memory:")
@@ -169,6 +186,44 @@ class RegistryPermissionTest(unittest.TestCase):
             reg.close()
             with self.assertRaises(sqlite3.ProgrammingError):
                 reg.conn.execute("SELECT 1")
+
+
+class HmacKeyFileHardeningTest(unittest.TestCase):
+    """S12: HMAC 密钥文件生成与复用都必须走 _harden 收紧 ACL。
+
+    反证: 若把 hooks._harden 换回 os.chmod(0o600), 这两个用例会失败——
+    Windows 上 chmod 不改 ACL, 且「既有文件」路径原本完全没做权限处理。
+    """
+
+    def setUp(self):
+        from presidio_pii import hooks
+        self.hooks = hooks
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.addCleanup(hooks.reset_singleton)
+        self.addCleanup(os.environ.pop, "PII_DSH_LOG_HMAC_KEY", None)
+        os.environ.pop("PII_DSH_LOG_HMAC_KEY", None)
+        hooks.reset_singleton()
+        os.environ["PII_DSH_DB_PATH"] = str(Path(self._tmp.name) / "store" / "s.db")
+        self.addCleanup(os.environ.pop, "PII_DSH_DB_PATH", None)
+
+    def test_new_key_file_is_hardened(self):
+        from unittest import mock
+        key_file = Path(self._tmp.name) / "store" / "journal_hmac.key"
+        with mock.patch.object(self.hooks, "_harden", wraps=self.hooks._harden) as spy:
+            self.hooks._hmac_key()
+            self.assertTrue(key_file.exists())
+            spy.assert_called_once_with(key_file, directory=False)
+
+    def test_existing_key_file_is_hardened_on_reuse(self):
+        from unittest import mock
+        key_file = Path(self._tmp.name) / "store" / "journal_hmac.key"
+        key_file.parent.mkdir(parents=True, exist_ok=True)
+        key_file.write_bytes(b"existing-secret-key")
+        with mock.patch.object(self.hooks, "_harden", wraps=self.hooks._harden) as spy:
+            key = self.hooks._hmac_key()
+            self.assertEqual(key, b"existing-secret-key")
+            spy.assert_called_once_with(key_file, directory=False)
 
 
 if __name__ == "__main__":

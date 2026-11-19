@@ -18,6 +18,14 @@
 # 验证：node tools/verify_preset_plugins.mjs 全绿；
 #       dsh --profile web --dump-config 应只含一行 preset-presidio-pii；
 #       GUI 重启后「PII 防护模式」不再显示「加载失败」。
+#
+# 【可安装模板 / FIX-1】本文件是占位符模板，含 __REPO__ / __DSH_HOME__ 两个占位符，
+# 本体不含任何作者机器绝对路径，可被重复安装（模板永不改写）。
+#   安装：pwsh tools/install.ps1 -Repo <仓库根> -DshHome <DSH_HOME>
+#   脚本读本模板 → 替换占位符 → 生成 cordis.patch.yml.installed（与模板同目录），
+#   plugin_manager install_bundle 实际安装的是 bundle 目录，配置源仍指向 ./cordis.patch.yml。
+#   如需让安装产物长期生效，可把 .installed 内容覆盖到你 own 的 home/profile patch（不在本脚本职责内）。
+#   安装时务必保证 __DSH_HOME__/plugins/dsh-pii-guard/lib/index.js 已由 install.ps1 复制到位。
 - insert:
     - id: preset-presidio-pii
       name: '@deepseek-ai/dsh-agent-preset'
@@ -61,7 +69,7 @@
                 (3) offline batch processing; (4) verifying redact→restore is lossless.
                 For those cases run `python -m presidio_pii.cli redact <file>` /
                 `restore <file>` and keep artifacts under
-                E:\Code\dsh-presidio-preset\.pii_presidio_store\. Do NOT run the CLI for
+                <repo-root>/.pii_presidio_store/. Do NOT run the CLI for
                 ordinary reading, and do not add a restore/verification step to every
                 answer.
 
@@ -71,11 +79,11 @@
                 PowerShell syntax and Windows paths.
 
                 Sandboxed execution rules (only when you actually use the CLI):
-                1. Do NOT rely on the current working directory. Pass ABSOLUTE paths:
-                   repository root is E:\Code\dsh-presidio-preset.
+                1. Do NOT rely on the current working directory. Pass ABSOLUTE paths
+                   under the repository root (the checkout containing this preset).
                 2. Create output directories with `pwsh` (New-Item -ItemType Directory)
                    BEFORE running the CLI or verify_check.py.
-                3. Keep every artifact under E:\Code\dsh-presidio-preset\.pii_presidio_store\.
+                3. Keep every artifact under <repo-root>/.pii_presidio_store/.
 
                 When the user asks about redaction capabilities, entities, custom
                 rules, or whitelists, load the `presidio-pii` skill for the exact CLI
@@ -107,12 +115,16 @@
           - id: tool-schedule
             name: '@deepseek-ai/dsh-tool-schedule'
           - id: pii-guard
-            name: 'file:///E:/Code/dsh_home/plugins/dsh-pii-guard/lib/index.js'
+            name: 'file:///__DSH_HOME__/plugins/dsh-pii-guard/lib/index.js'
+            config:
+              # 部署态（插件位于 DSH_HOME）无法从模块路径推断仓库根，必须显式给出。
+              # install.ps1 安装时把 __REPO__ 替换为真实仓库根；env PII_GUARD_REPO 可覆盖。
+              repo: '__REPO__'
           - id: skill-filesystem
             name: '@deepseek-ai/dsh-skill-filesystem'
             config:
               customSkillDirs:
-                - 'E:/Code/dsh-presidio-preset/.agent-presets/presidio-pii/skills'
+                - '__REPO__/.agent-presets/presidio-pii/skills'
           - id: tool-skill
             name: '@deepseek-ai/dsh-tool-skill'
           - id: command-goal

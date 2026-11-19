@@ -94,23 +94,33 @@ class PresetHotReloadTest(unittest.TestCase):
     def test_unknown_preset_keeps_previous_values(self):
         """preset 写坏时只能告警，不能把收窄过的配置静默重置成全开。
 
-        关键：基线必须先**收窄**（只开 PHONE_NUMBER），否则「全部启用」与
-        「读失败回退到全部启用」在外部表现上完全一样，这条测试就失去证明力。
+        关键：基线必须先**收窄**（只开 PHONE_NUMBER + 设白名单），否则
+        「全部启用/白名单清空」与「读失败回退」在外部表现上完全一样，
+        这条测试就失去证明力。entity_types 与 whitelist 两条路径都要覆盖——
+        曾经白名单在写坏 preset 后被静默清空（S11/S14）。
         """
+        wl = Path(self._tmp.name) / "wl_keep.txt"
+        wl.write_text(NAME + "\n", encoding="utf-8")
         data = json.loads(self._backup.decode("utf-8"))
         data["entity_types"] = ["PHONE_NUMBER"]
+        data.setdefault("config", {})["whitelist_path"] = str(wl).replace("\\", "/")
         PRESET.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n",
                           encoding="utf-8")
         engine = self.hooks._get_engine()
         self.assertEqual(set(engine.entity_types), {"PHONE_NUMBER"})
+        self.assertIn(NAME, engine.whitelist, "基线白名单应已加载")
 
         PRESET.write_text("{ this is not json", encoding="utf-8")
         again = self.hooks._get_engine()
         self.assertEqual(set(again.entity_types), {"PHONE_NUMBER"},
-                         "preset 解析失败应保留上一次已知好配置")
-        # 只看 entity_types 还不够——要确认行为上真的还在收窄
+                         "preset 解析失败应保留上一次已知好配置的实体类型")
+        self.assertIn(NAME, again.whitelist,
+                      "preset 写坏后白名单应保留旧值，不得被静默清空")
+        # 只看属性值还不够——要确认行为上两条都还在收窄/豁免
         out = again.redact("张三的电话是13800138000", "t-bad").text
         self.assertIn(NAME, out, "人名不该重新被脱敏（说明没收窄成全开）")
+        wl_out = again.redact(NAME + "与李四签订合同", "t-bad-wl").text
+        self.assertIn(NAME, wl_out, "白名单词在 preset 写坏后仍应被豁免")
 
     def test_new_engine_reads_preset_without_restart(self):
         """reset 后新建的引擎也必须按当前 preset 配置。"""

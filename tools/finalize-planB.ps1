@@ -1,7 +1,8 @@
 # finalize-planB.ps1 — 方案 B 收尾一键脚本（交接清单第 1+2 步合并）
 #
 # 用法：完全退出 DSH（托盘右键 → 完全退出）后，在普通 PowerShell 里运行：
-#   powershell -ExecutionPolicy Bypass -File E:\Code\dsh-presidio-preset\tools\finalize-planB.ps1
+#   powershell -ExecutionPolicy Bypass -File <仓库根>\tools\finalize-planB.ps1
+#   （Repo 默认取脚本所在仓库根；安装位默认取 $env:DSH_HOME，可用 -DshHome 覆盖）
 #
 # 做什么：
 #   1) 同步插件仓库副本 → DSH 安装位，并校验 sha256 一致（drift 即中止）
@@ -11,11 +12,21 @@
 #
 # 结束后：重新启动 DSH → 选 presidio-pii 预设 → 按交接清单第 3 步做 GUI 验证。
 
+param(
+    [string]$Repo,
+    [string]$DshHome = $env:DSH_HOME
+)
+
 $ErrorActionPreference = 'Stop'
-$Repo    = 'E:\Code\dsh-presidio-preset'
+# FIX-1: 去掉作者硬编码路径——Repo 默认脚本所在仓库根，DshHome 取环境变量。
+if ([string]::IsNullOrWhiteSpace($Repo)) { $Repo = Split-Path -Parent $PSScriptRoot }
+$Repo    = (Resolve-Path $Repo).Path
+if ([string]::IsNullOrWhiteSpace($DshHome)) {
+    Write-Host '[WARN] 未设置 $env:DSH_HOME，插件安装位同步将跳过；请用 -DshHome 指定。' -ForegroundColor Yellow
+}
 $Plugin  = Join-Path $Repo 'plugins\dsh-pii-guard\lib\index.js'
-$Install = 'E:\Code\dsh_home\plugins\dsh-pii-guard\lib\index.js'
-$Py      = 'D:\Python\313\python.exe'
+$Install = if ([string]::IsNullOrWhiteSpace($DshHome)) { '' } else { Join-Path $DshHome 'plugins\dsh-pii-guard\lib\index.js' }
+$Py      = 'python'
 $Epoch   = '1700000000'
 $Manifest = Join-Path $Repo 'release\presidio-pii-dsh-0.1.0.json'
 
@@ -25,6 +36,9 @@ function Die([string]$msg) { Write-Host "[FAIL] $msg" -ForegroundColor Red; exit
 Write-Host '=== Step 1: 同步插件到安装位 ===' -ForegroundColor Cyan
 if (-not (Test-Path $Plugin)) { Die "插件副本不存在: $Plugin" }
 $syncOk = $false
+if ([string]::IsNullOrWhiteSpace($Install)) {
+    Write-Host '[WARN] 未指定 DshHome，跳过安装位同步（仓库副本仍会校验）。' -ForegroundColor Yellow
+} else {
 try {
     Copy-Item $Plugin $Install -Force
     $shaRepo = Get-Sha $Plugin
@@ -34,6 +48,7 @@ try {
     Write-Host "[OK] 插件已同步, sha256=$($shaRepo.Substring(0,16))..."
 } catch {
     Write-Host "[WARN] 插件未同步（DSH 还在运行？稍后退出 DSH 再单独跑本脚本或手动 Copy-Item）: $($_.Exception.Message)" -ForegroundColor Yellow
+}
 }
 
 Write-Host '=== Step 2: 重建 wheel（两次，校验可复现）===' -ForegroundColor Cyan
@@ -53,7 +68,7 @@ foreach ($d in @($b1, $b2)) {
     New-Item -ItemType Directory -Path $d -Force | Out-Null
 }
 & $Py -m pip wheel . --no-deps -w $b1 --disable-pip-version-check 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) { Die '第一次构建失败（pip wheel b1）。若本脚本是从 DSH 会话内跑的：请在 DSH 完全退出后、从独立的 PowerShell 窗口重跑（DSH 沙箱会拦截子进程写临时目录）。若已在正常窗口仍失败，把 TEMP 指到可写盘：$env:TEMP="E:\pii_tmp"' }
+if ($LASTEXITCODE -ne 0) { Die '第一次构建失败（pip wheel b1）。若本脚本是从 DSH 会话内跑的：请在 DSH 完全退出后、从独立的 PowerShell 窗口重跑（DSH 沙箱会拦截子进程写临时目录）。若已在正常窗口仍失败，把 $env:TEMP 指到任意可写临时目录再重跑' }
 & $Py -m pip wheel . --no-deps -w $b2 --disable-pip-version-check 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) { Die '第二次构建失败（pip wheel b2）。处置同上' }
 

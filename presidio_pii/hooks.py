@@ -32,6 +32,7 @@ import sys
 from pathlib import Path
 from typing import Tuple
 
+from .db import _harden
 from .engine import PresidioPIIEngine
 from .journal import DEFAULT_MAX_BYTES, JsonlJournal
 
@@ -48,11 +49,12 @@ def _preset_file() -> Path:
     return Path(os.environ.get("PII_DSH_PRESET", str(_DEFAULT_PRESET)))
 
 
-def _preset_config() -> dict:
+def _preset_config(strict: bool = False) -> dict:
     """读取 DSH preset.json 的 config 段 (路径可用 PII_DSH_PRESET 覆盖)。
 
-    环境变量优先级高于 preset 配置; preset 文件缺失或损坏时返回空字典,
-    不影响环境变量与默认值生效。
+    环境变量优先级高于 preset 配置; 文件缺失时返回空字典 (合法的「全部启用」)。
+    文件存在但读不出来时: strict=True 抛 PresetUnreadable (供热更新保留旧值),
+    否则告警并返回空字典 (首次加载走安全默认值)。
     """
     fp = _preset_file()
     if not fp.exists():
@@ -60,19 +62,22 @@ def _preset_config() -> dict:
     try:
         data = json.loads(fp.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as exc:
+        if strict:
+            raise PresetUnreadable(f"{fp}: {exc}") from exc
         print(f"[pii] preset 配置读取失败 ({fp}): {exc}", file=sys.stderr)
         return {}
     cfg = data.get("config")
     return cfg if isinstance(cfg, dict) else {}
 
 
-def _preset_path(key: str) -> str | None:
+def _preset_path(key: str, strict: bool = False) -> str | None:
     """取 preset 配置中的路径字段。
 
     相对路径优先按仓库根目录解析 (与默认 db_path 一致), 不存在时再按
     preset.json 所在目录解析 (支持把规则文件与 preset 放一起)。
+    strict=True 时读取失败抛 PresetUnreadable。
     """
-    value = _preset_config().get(key)
+    value = _preset_config(strict=strict).get(key)
     if not value:
         return None
     p = Path(value)
@@ -87,8 +92,9 @@ def _db_path() -> Path:
                 or _preset_path("db_path") or _DEFAULT_DB)
 
 
-def _whitelist_file() -> str | None:
-    return os.environ.get("PII_DSH_WHITELIST") or _preset_path("whitelist_path")
+def _whitelist_file(strict: bool = False) -> str | None:
+    return (os.environ.get("PII_DSH_WHITELIST")
+            or _preset_path("whitelist_path", strict=strict))
 
 
 def _custom_rules_spec() -> str | None:
@@ -125,15 +131,26 @@ def _rules_reload_interval() -> float:
     return _parse_interval(raw)
 
 
-def _whitelist() -> list:
-    """从白名单文件读取关键词 (每行一个词, # 注释)。"""
-    raw = _whitelist_file()
+def _whitelist(strict: bool = False) -> list:
+    """从白名单文件读取关键词 (每行一个词, # 注释)。
+
+    文件不存在是合法的「清空白名单」, 仍返回 []。文件存在但读不出来时,
+    strict=True 抛 PresetUnreadable (供热更新保留旧值)。
+    """
+    raw = _whitelist_file(strict=strict)
     if not raw:
         return []
     fp = Path(raw)
     if not fp.exists():
         return []
-    return [ln.strip() for ln in fp.read_text(encoding="utf-8-sig").splitlines()
+    try:
+        text = fp.read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        if strict:
+            raise PresetUnreadable(f"白名单文件 {fp}: {exc}") from exc
+        print(f"[pii] 白名单文件读取失败 ({fp}): {exc}", file=sys.stderr)
+        return []
+    return [ln.strip() for ln in text.splitlines()
             if ln.strip() and not ln.strip().startswith("#")]
 
 
@@ -205,7 +222,11 @@ def _maybe_reload_preset(engine: PresidioPIIEngine) -> None:
         print(f"[pii] 实体类型热更新失败, 保留旧值: {exc}", file=sys.stderr)
 
     try:
-        engine.set_whitelist(_whitelist())
+        # strict=True: preset 写坏 / 白名单文件读不出来时抛 PresetUnreadable,
+        # 让下面的异常路径真正「保留旧值」, 而不是把白名单静默清空。
+        engine.set_whitelist(_whitelist(strict=True))
+    except PresetUnreadable as exc:
+        print(f"[pii] 白名单读取失败, 保留旧值: {exc}", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001
         print(f"[pii] 白名单热更新失败, 保留旧值: {exc}", file=sys.stderr)
 
@@ -312,6 +333,9 @@ def _hmac_key() -> bytes:
     try:
         data = key_file.read_bytes()
         if data:
+            # 既有文件也要收紧: 历史版本只做了 chmod, Windows 上 ACL 仍然宽松,
+            # 这里统一用 db._harden 补上 (幂等, 失败只告警不阻断)。
+            _harden(key_file, directory=False)
             _HMAC_KEY = data
             return _HMAC_KEY
     except OSError:
@@ -320,10 +344,9 @@ def _hmac_key() -> bytes:
     try:
         key_file.parent.mkdir(parents=True, exist_ok=True)
         key_file.write_bytes(secret)
-        try:
-            os.chmod(key_file, 0o600)
-        except OSError:
-            pass
+        # Windows 上 os.chmod(0o600) 只改只读位、不动 ACL, 同机其他账号仍可读;
+        # 复用 db._harden (Windows icacls / POSIX chmod 0600) 真正收紧到本人可读写。
+        _harden(key_file, directory=False)
     except OSError as exc:
         # 落盘失败时退回进程内密钥: 日志仍不可反查, 但重启后指纹不再一致
         print(f"[pii] 无法写入日志密钥 ({key_file}): {exc}", file=sys.stderr)

@@ -2,7 +2,7 @@
 //
 // 挂载方式（preset plugins 内）:
 //   - id: pii-guard
-//     name: 'file:///E:/Code/dsh_home/plugins/dsh-pii-guard/lib/index.js'
+//     name: 'file:///<DSH_HOME>/plugins/dsh-pii-guard/lib/index.js'
 //
 // 接缝：tools/post-execute（waterfall，签名 (exec, result, next)）
 //   dsh-tools 的 tools/execute 拿到的是 deepFreeze 后的 canonical 结果，
@@ -39,6 +39,8 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { appendFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
+import { dirname, resolve as resolvePath } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const SHELL_TOOLS = new Set(["pwsh", "bash"]);
 const JOB_TOOLS = new Set(["job_output", "job_list"]);
@@ -57,10 +59,39 @@ const MAX_JOB_BYTES = 256_000;
 const TRUNC_MARK = "\n[pii-guard] output truncated to 256000 bytes before redaction";
 const BLOCK_MARK = "[pii-guard] PII redaction service unavailable; tool result blocked (fail-closed). Retry, or set PII_GUARD_FAIL_OPEN=1 for troubleshooting.";
 const PY = process.env.PII_GUARD_PY ?? "python";
-// 仓库位置可用 PII_GUARD_REPO 覆盖（默认本机开发路径），便于换机器/目录部署
-const REPO = process.env.PII_GUARD_REPO ?? "E:/Code/dsh-presidio-preset";
-const SERVER = REPO + "/presidio_pii/server.py";
-const HOOK_LOG = REPO + "/.pii_presidio_store/hook_log.jsonl";
+// S3: 仓库位置解析必须与 dsh-pii-guard-terms 的 resolveRepo 对齐——
+//   config.repo（宿主传入的 bundle config）> env PII_GUARD_REPO > 推断默认值。
+// 原先只认 env，导致「只配 bundle config.repo」时 terms 写 A 路径、guard 读 B 路径，
+// UI 保存的设置静默失效。这些派生路径改为 let，在 apply() 时按实际 config 重算。
+// FIX-1: 默认兜底不再写死作者路径，改为从 import.meta.url 推断仓库候选。
+//   本插件位于 <root>/plugins/dsh-pii-guard/lib/index.js；从 lib 目录向上三级
+//   才是 root（lib -> dsh-pii-guard -> plugins -> root）。部署态 root 是 DSH_HOME
+//   （无 presidio_pii/server.py），仓库态则是仓库根（含 presidio_pii/server.py）。
+//   用该哨兵文件区分：命中则返回仓库根；否则返回空串并由调用方告警要求显式配置。
+function inferRepoFromModule() {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const candidate = resolvePath(here, "..", "..", "..");
+    return existsSync(resolvePath(candidate, "presidio_pii", "server.py"))
+      ? candidate.replace(/\\/g, "/").replace(/\/+$/, "")
+      : "";
+  } catch {
+    return "";
+  }
+}
+const DEFAULT_REPO = inferRepoFromModule();
+function resolveRepo(config) {
+  const fromConfig = typeof config?.repo === "string" ? config.repo.trim() : "";
+  const fromEnv = typeof process.env.PII_GUARD_REPO === "string" ? process.env.PII_GUARD_REPO.trim() : "";
+  const resolved = (fromConfig || fromEnv || DEFAULT_REPO).replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!resolved) {
+    console.error("[pii-guard] 无法确定仓库根：请配置 bundle config.repo 或环境变量 PII_GUARD_REPO（默认推断失败，插件部署在 DSH_HOME 时无法自动定位仓库）。");
+  }
+  return resolved;
+}
+let REPO = resolveRepo(null);
+let SERVER = REPO + "/presidio_pii/server.py";
+let HOOK_LOG = REPO + "/.pii_presidio_store/hook_log.jsonl";
 const SID = "pii-guard-" + process.pid;
 const CALL_TIMEOUT_MS = 30_000;
 // 占位符完整形态与「疑似前缀」（可能被 chunk 边界截断的尾部）
@@ -75,7 +106,7 @@ const PH_TAIL = /⟦(?:PII:[A-Z_]+(?::\d*)?)?$/;
 //   failOpen       boolean                    服务异常时透传（仅排障，默认 false=阻断）
 //   shellDisabled  boolean                    true=整个进程不拦 shell/后台任务
 //   shellAllowlist string(RegExp source)      对 pwsh 命令字符串的白名单正则
-const GUARD_SETTINGS_FILE = REPO + "/.pii_presidio_store/guard-settings.json";
+let GUARD_SETTINGS_FILE = REPO + "/.pii_presidio_store/guard-settings.json";
 
 function coerceDisplayMode(v) {
   const s = String(v ?? "").toLowerCase();
@@ -489,8 +520,24 @@ function shellBypassReason(exec) {
   return null;
 }
 
-// apply(ctx, deps?) — deps.redact / deps.restore 可注入（单元测试用 mock，生产用默认 IPC 版）
-export async function apply(ctx, deps = {}) {
+// S3: 按宿主传入的 bundle config 重算仓库相关派生路径，并清掉设置缓存。
+// 宿主调用约定为 apply(ctx, config)（见 cordis/lib/index.js:365）；第二参数
+// 同时也被单元测试用于注入 redact/restore mock，因此这里两者都从同一对象取。
+function configurePaths(config) {
+  const repo = resolveRepo(config);
+  REPO = repo;
+  SERVER = repo + "/presidio_pii/server.py";
+  HOOK_LOG = repo + "/.pii_presidio_store/hook_log.jsonl";
+  GUARD_SETTINGS_FILE = repo + "/.pii_presidio_store/guard-settings.json";
+  // 路径可能变了：清掉按 mtime+size 缓存的设置，下一次 readSettings 重新读新路径
+  _cfg = { sig: "", values: null, allowlist: null, allowlistSrc: null };
+}
+
+// apply(ctx, options?) — 宿主传 bundle config（含 repo）；单元测试在此注入
+// redact / restore mock。两种用法共用第二参数，键名互不冲突。
+export async function apply(ctx, options = {}) {
+  configurePaths(options);
+  const deps = options ?? {};
   const redactFn = deps.redact ?? redact;
   const restoreFn = deps.restore ?? restoreText;
   restoreImpl = restoreFn; // 注入到 scheduleRestore

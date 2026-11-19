@@ -49,13 +49,13 @@
       1. Do NOT rely on the current working directory. The engine is installed
          (pip package `presidio-pii-dsh`), but any command that writes into
          `.pii_presidio_store/` under the CWD will fail with PermissionError.
-         Always pass ABSOLUTE paths: repository root is
-         E:\Code\dsh-presidio-preset.
+         Always pass ABSOLUTE paths derived from the repository root of the
+         checkout containing this preset (do not assume a fixed author path).
       2. Create output directories with `pwsh` (New-Item -ItemType Directory)
          BEFORE running the CLI or verify_check.py. A Python child process
          cannot write into a directory it created itself in this sandbox.
       3. Keep every artifact (redacted output, mapping CSV, session CSV, log,
-         db) under E:\Code\dsh-presidio-preset\.pii_presidio_store\. Never
+         db) under <repo-root>/.pii_presidio_store/ of this checkout. Never
          write artifacts into the user's project directory.
 
       When the user asks about redaction capabilities, entities, custom

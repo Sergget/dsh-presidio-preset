@@ -18,7 +18,7 @@
 
 核心风险集中在三处：**JS 侧进程管理与 ReDoS 防护**（直接影响 agent 工具循环可用性）、**发布溯源口径不一致**（按 RUNBOOK 回退会用错哈希/拉错产物），以及 **`entity_types` 未知类型导致静默零脱敏**（fail-open 漏 PII，与「宁可过度脱敏也不能漏脱敏」的安全方向相反）。另需说明：当前 `pytest` 大面积 `WinError 5` 为 **DSH workspace-write 沙箱对系统 temp 目录的写入限制**，非代码回归（见「四、测试与验证」）。
 
-> **修复状态（2026-11-19）**：用户要求「修复 p0 p1」后，4 个 Blocker（B1/B2/B3/B4）已全部修复并逐条探针复验，P1 验证闭环已在 danger-full-access 下重跑完整测试套件（**258 passed, 8 subtests passed**）。详见「六、P0/P1 修复闭环」。下列一～四章保留原始审查发现作为历史记录，修复后现状以第六章为准。
+> **修复状态（2026-11-19）**：用户要求「修复 p0 p1」后，4 个 Blocker（B1/B2/B3/B4）已全部修复并逐条探针复验，P1 验证闭环已在 danger-full-access 下重跑完整测试套件（**258 passed, 8 subtests passed**）。详见「六、P0/P1 修复闭环」。随后「继续开发，推荐下一步修复」，按推荐收口了 S11（白名单热更新读坏被静默清空）+ S14 测试覆盖 + S12（HMAC 密钥文件 Windows ACL），详见「七、后续修复」；再按用户指定收口 S13（过滤时序测试断言过弱）+ S3（settingsFile 数据源分裂），详见「八、S13 / S3 修复」。全量复跑 **260 passed, 8 subtests passed**，三套 JS 烟测（display/jobs/terms）全绿。下列一～四章保留原始审查发现作为历史记录，修复后现状以第六、七、八章为准。
 
 ---
 
@@ -61,7 +61,7 @@
 - `plugins/dsh-pii-guard/lib/index.js:716-719, 698, 390-404` — `acc.replace(PH_FULL, (ph)=>{ if(!phMap.has(ph)) scheduleRestore(ph); return ph; })` 在回填完成前直接 `return ph` 透传原始 `⟦PII:...⟧`；`splitDisplayable`（378-384）与 end 帧（698）用的是回填前的 `phMap`。占位符在一次输出里通常只出现一次，回填完成后没有重渲染机制 → 用户永久看到原始占位符。**这与本轮「phMap 重启后懒加载恢复」修复的核心目标直接冲突**：当前实现只在「同一占位符后续帧再现」时才命中缓存，实际不成立。**改法**：占位符首帧先扣住（放入 `displayBufs.pending`），`scheduleRestore` 完成（`then` 内 397 行 set 后）触发补发帧；或让流式替换返回「待定 token」，回填后用带 index 的 text-delta 覆盖。
 - *补充核查*：phMap 恢复的 SID 一致性不构成问题——`callServer` 在 261 行统一注入 `sid: SID`（`SID="pii-guard-"+process.pid`，64 行），`restoreText` 经 `callServerWithRetry → callServer` 与脱敏侧同一 sid，能命中映射，不报告为问题。
 
-### S3. settingsFile 数据源分裂，仅配 bundle config.repo 时设置失效
+### S3. settingsFile 数据源分裂，仅配 bundle config.repo 时设置失效（✅ 已修复，见第八章）
 - `plugins/dsh-pii-guard/lib/index.js:61, 78` + `plugins/dsh-pii-guard-terms/lib/index.js:45-50, 589` — terms 端 `resolveRepo(rawConfig)` 取 `config.repo` 优先于 env；guard 端 `REPO = env PII_GUARD_REPO ?? 默认`（61 行），`GUARD_SETTINGS_FILE` 由 `REPO` 拼出（78 行），只认 env。若只配 bundle `config.repo` 而不配 `PII_GUARD_REPO`，terms 写到 A 路径、guard 读 B 路径，UI 保存的设置不生效。S2 的 `warnIfPathDrift`（461-474）只比对 termsFile vs preset `custom_rules_path`，未覆盖 settingsFile。**改法**：guard 也读取 bundle `config.repo`，或 terms 写文件时以 guard 实际使用的 settingsFile 为准；把 settingsFile 纳入 drift 校验。
 
 ### S4. shellDisabled 三处判定口径不一致
@@ -86,17 +86,17 @@
 - `README.en.md:132-135` vs `README.md:121-126` — 英文版把 `agent.cordis.yml` 描述为 standard/compatible with dsh 0.2.x，缺 legacy 与 bundle `cordis.patch.yml`（权威源）条目，违反 `agent.md:35-37` 内容对齐要求。
 - `README.en.md:118-126` vs `README.md:119` — 英文版架构节缺 `docs/SECURITY-NOTES.md`（部署前必读）条目。
 
-### S11. 热更新写坏 preset 时白名单被静默清空，未兑现「保留旧值」承诺
-- `presidio_pii/hooks.py:207-210` — `_maybe_reload_preset` 注释（L193-194）承诺「读取失败保留旧值，实体类型与白名单分开 try」，实体类型路径做到了（`set_entity_types` 遇 `PresetUnreadable` 保留旧值）；但 `set_whitelist([])` 照常执行。原因：`_whitelist()→_preset_path()→_preset_config()`（L51-66）在 JSON 解析失败时只告警并返回 `{}`，不抛 `PresetUnreadable`，所以 L207-210 的 try 捕获不到。审查员探针实测：GOOD whitelist=`['ZhangSan']`，写坏 preset 后 BAD whitelist=`[]`，而 entity_types 正确保留——两者处理不一致。**改法**：让 `_preset_config()` 在读坏时也抛 `PresetUnreadable`（或在 `set_whitelist` 前先验 preset 可读），使异常路径真正保留旧值。
+### S11. 热更新写坏 preset 时白名单被静默清空，未兑现「保留旧值」承诺（✅ 已修复，见第七章）
+- `presidio_pii/hooks.py:207-210` — `_maybe_reload_preset` 注释（L193-194）承诺「读取失败保留旧值，实体类型与白名单分开 try」，实体类型路径做到了（`set_entity_types` 遇 `PresetUnreadable` 保留旧值）；但 `set_whitelist([])` 照常执行。原因：`_whitelist()→_preset_path()→_preset_config()`（L51-66）在 JSON 解析失败时只告警并返回 `{}`，不抛 `PresetUnreadable`，所以 L207-210 的 try 捕获不到。审查员探针实测：GOOD whitelist=`['ZhangSan']`，写坏 preset 后 BAD whitelist=`[]`，而 entity_types 正确保留——两者处理不一致。**改法**：让 `_preset_config()` 在读坏时也抛 `PresetUnreadable`（或在 `set_whitelist` 前先验 preset 可读），使异常路径真正保留旧值。**修复**：配置读取链加 `strict` 开关，热更新以 `strict=True` 调用，异常路径真正保留旧值。
 
-### S12. HMAC 密钥文件在 Windows 上 ACL 未收紧，注释虚假
-- `presidio_pii/hooks.py:302, 323-326` — HMAC 密钥文件（`journal_hmac.key`）在 Windows 上仅调用 `os.chmod(key_file, 0o600)`，而 Windows 的 chmod 只影响只读位、几乎不改 ACL；注释却声称「Windows 上按当前用户 ACL 收紧」。`journal_hmac.key` 可反查所有日志指纹，若继承父目录的 Users/Authenticated Users 读权限，同机其他账号可读密钥从而暴力枚举反推原文，削弱 HMAC 加固意义。`db.py` 已有成熟的 `_harden()` 可直接复用。**改法**：Windows 分支调用 `db._harden(key_file, directory=False)`，或删掉虚假注释并明确记录该限制。
+### S12. HMAC 密钥文件在 Windows 上 ACL 未收紧，注释虚假（✅ 已修复，见第七章）
+- `presidio_pii/hooks.py:302, 323-326` — HMAC 密钥文件（`journal_hmac.key`）在 Windows 上仅调用 `os.chmod(key_file, 0o600)`，而 Windows 的 chmod 只影响只读位、几乎不改 ACL；注释却声称「Windows 上按当前用户 ACL 收紧」。`journal_hmac.key` 可反查所有日志指纹，若继承父目录的 Users/Authenticated Users 读权限，同机其他账号可读密钥从而暴力枚举反推原文，削弱 HMAC 加固意义。`db.py` 已有成熟的 `_harden()` 可直接复用。**改法**：Windows 分支调用 `db._harden(key_file, directory=False)`，或删掉虚假注释并明确记录该限制。**修复**：`hooks.py` 导入 `db._harden`，密钥文件「新建」与「既有复用」两条路径都调用 `_harden(key_file, directory=False)`（幂等、失败只告警不阻断），删掉虚假 chmod 注释。
 
-### S13. `test_filter_runs_before_overlap_resolution` 断言过弱，无法验证过滤时序
-- `tests/test_security_hardening.py:86-90` — 只断言 `found <= {"ORGANIZATION"}`，若过滤发生在冲突消解之后导致结果为空集，空集同样满足该断言、测试照样通过；且 TEXT（L68）中并无与 LOCATION 明确重叠的 ORGANIZATION 实体，测试意图无法真正验证。**改法**：断言改为 `found == {"ORGANIZATION"}`，并构造确有 LOCATION/ORGANIZATION 重叠的文本，确保能区分「过滤在前」还是「过滤在后」。
+### S13. `test_filter_runs_before_overlap_resolution` 断言过弱，无法验证过滤时序（✅ 已修复，见第八章）
+- `tests/test_security_hardening.py:86-90` — 只断言 `found <= {"ORGANIZATION"}`，若过滤发生在冲突消解之后导致结果为空集，空集同样满足该断言、测试照样通过；且 TEXT（L68）中并无与 LOCATION 明确重叠的 ORGANIZATION 实体，测试意图无法真正验证。审查期探针实测：`entity_types=['ORGANIZATION']` 对原 TEXT 返回 `[]`，旧断言恒真。**改法**：改为直接注入两段完全重叠、类型不同的 `RecognizerResult`（LOCATION(0,10) 与 ORGANIZATION(0,5)），断言过滤后只剩 ORGANIZATION、且经消解后区间仍为 (0,5)。**修复**：见第八章——用注入结果替代真实语料，断言过滤时序；反证「先消解再过滤」得到空集、测试必失败。
 
-### S14. `test_unknown_preset_keeps_previous_values` 未覆盖白名单保留
-- `tests/test_preset_hot_reload.py:94-113` — 只验证 entity_types 在写坏 preset 后保留，未验证 whitelist，恰好漏掉 S11 的白名单被清空问题。**改法**：先经 preset 设置一个白名单，写坏 preset 后同时断言 whitelist 仍保留旧值。
+### S14. `test_unknown_preset_keeps_previous_values` 未覆盖白名单保留（✅ 已修复，见第七章）
+- `tests/test_preset_hot_reload.py:94-113` — 只验证 entity_types 在写坏 preset 后保留，未验证 whitelist，恰好漏掉 S11 的白名单被清空问题。**改法**：先经 preset 设置一个白名单，写坏 preset 后同时断言 whitelist 仍保留旧值。**修复**：测试基线改为同时收窄 entity_types + 设白名单，写坏后同时断言两者保留。
 
 ### S15. 热更新测试直接读写仓库真实 preset.json，脆弱且不安全
 - `tests/test_preset_hot_reload.py:20, 30, 37, 45` — 测试直接读写仓库真实 `.agent-presets/presidio-pii/preset.json`，靠 `setUp`/`cleanup` 备份恢复：测试被中断/进程崩溃时 `_restore` 可能不执行而留下被改坏的 preset；并行运行会互相踩踏；只读 CI 或 preset 为符号链接时会失败。hooks 已支持 `PII_DSH_PRESET` 覆盖（L48）。**改法**：用 env 指向临时 preset 副本，不碰仓库真实文件。
@@ -190,7 +190,7 @@
 - `get_max_seq` 修复（`db.py:133-150`）：审查员探针实测 9999→10000→10001 连续递增、跨 ptype 不串号，修复正确；`test_security_hardening` 的 5 个用例覆盖充分。
 - `release_gate.py` 的 `_SAFE_VALUE`/`_SAFE_EXPR`/`_mask`/`_scan_text` 及对应 5 个测试：硬编码凭据仍被抓、运行时生成/间接引用被合理抑制、掩码不泄漏原值，未发现问题（注意：这与工具/文档审查员的 S9「白名单过宽」不矛盾——S9 针对的是更宽泛的 `[\w.]+\(` 形态，需合并评估）。
 - `SessionRegistry.close()`/`__enter__`/`__exit__` 实现正确。
-- **fail-open 总评**：未彻底消除——① `entity_types` 含未知类型→零脱敏（漏 PII，危险方向，B4）；② 白名单热更新读坏→被清空（S11，违背保留旧值承诺）。首次加载读坏回退全开、`entity_types` 热更新读坏保留旧值这两个路径正确。
+- **fail-open 总评（历史记录）**：审查时未彻底消除——① `entity_types` 含未知类型→零脱敏（漏 PII，危险方向，B4）；② 白名单热更新读坏→被清空（S11，违背保留旧值承诺）。首次加载读坏回退全开、`entity_types` 热更新读坏保留旧值这两个路径正确。**更新（2026-11-19）**：B4 已在第六章修复，S11 已在第七章修复，两条 fail-open 路径均已消除。
 
 ---
 
@@ -218,6 +218,47 @@
 
 ### 6.3 剩余未修项（本轮范围外）
 
-- 15 条 Suggestion（S1–S15）与 7 条 Nit（N1–N7）本轮未修改，包括但不限于：S3 配置源分裂、S11 白名单热更新读坏被清空、S12 HMAC 密钥文件 Windows ACL、S13/S14/S15 测试质量、N1 标题层级等。
-- 其中 **S11**（白名单热更新读坏→清空，违背保留旧值承诺）仍是一条未消除的 fail-open 路径，建议下轮优先处理。
+- 15 条 Suggestion（S1–S15）与 7 条 Nit（N1–N7）中，S11/S12/S14 已在「继续开发」轮次修复（见第七章），S13/S3 已在后续轮次修复（见第八章），其余未修改，包括但不限于：S15 测试质量、N1 标题层级等。
+- 其中 S11（白名单热更新读坏→清空）原列为下轮优先，已修复；S12（HMAC 密钥文件 Windows ACL）同属安全域一并收口。
 - 配置页 UI 标签化改造（第五章方案：脱敏规则 / 防护设置两类 + Shell 命令例外归入防护设置）本轮仅出方案、未改代码；后续实施应与 N1 合并。
+
+---
+
+## 七、后续修复：S11 / S14 / S12（2026-11-19）
+
+用户要求「继续开发，推荐下一步修复」。按报告 6.3 的推荐，先收口最后一条未消除的 fail-open 路径 S11 及其测试盲区 S14，再顺手收掉同属安全域的 S12；三处均已修复并全量回归通过。
+
+### 7.1 修复内容
+
+| 编号 | 问题 | 修改位置 | 修复机制 |
+| --- | --- | --- | --- |
+| S11 | 热更新写坏 preset → 白名单被静默清空（`set_whitelist([])` 照常执行） | `presidio_pii/hooks.py` | 配置读取链加 `strict` 开关：`_preset_config(strict)` 读坏时抛 `PresetUnreadable`（非 strict 仍告警返回 `{}`，保持首次加载回退全开）；`_preset_path(strict)` / `_whitelist_file(strict)` / `_whitelist(strict)` 逐层传递；白名单文件 `OSError` 在 strict 下也抛 `PresetUnreadable`。`_maybe_reload_preset` 的 `set_whitelist` 改调 `_whitelist(strict=True)`，`PresetUnreadable` 走「保留旧值」告警。字段缺失/文件不存在仍返回 `[]`（合法的清空白名单），只有「存在但读不出来」才触发保留旧值。 |
+| S14 | `test_unknown_preset_keeps_previous_values` 只覆盖 entity_types、漏白名单 | `tests/test_preset_hot_reload.py` | 基线改为同时收窄 `entity_types=['PHONE_NUMBER']` 并设 `whitelist_path`；写坏 preset 后同时断言 entity_types 与 whitelist 保留旧值，并从行为层验证（人名仍不脱敏、白名单词仍豁免）。 |
+| S12 | HMAC 密钥文件 Windows 上只 `chmod(0o600)` 不改 ACL，注释虚假 | `presidio_pii/hooks.py` | 导入 `db._harden`；密钥文件「新建」与「既有复用」两条路径都调用 `_harden(key_file, directory=False)`（Windows `icacls` / POSIX `chmod 0600`，幂等、失败只告警不阻断），删掉虚假的 chmod 注释。 |
+
+### 7.2 验证证据
+
+- 单文件：`python -m pytest tests/test_preset_hot_reload.py -q --disable-warnings` → **5 passed in 53.26s，exit=0**（S11/S14）。
+- 单文件：`python -m pytest tests/test_security_hardening.py -q --disable-warnings` → **20 passed in 25.09s，exit=0**（含新增 2 条 HmacKeyFileHardeningTest，S12）。
+- 全量：`python -m pytest tests/ -q --disable-warnings` → **260 passed, 8 subtests passed in 301.99s，exit=0**，零失败、零回归（S12 阶段最终态）。
+- fail-open 两条路径（B4 的未知类型零脱敏、S11 的白名单读坏清空）至此**全部消除**；`entity_types`/`whitelist` 在 preset 写坏时均保留上一次已知好配置。
+
+---
+
+## 八、S13 / S3 修复（2026-11-19）
+
+用户明确指定「S13+S3」。两条均已修复、逐条反证、全量回归通过。
+
+### 8.1 修复内容
+
+| 编号 | 问题 | 修改位置 | 修复机制 |
+| --- | --- | --- | --- |
+| S13 | `test_filter_runs_before_overlap_resolution` 断言恒真：原 TEXT 里根本没有 ORGANIZATION，`found <= {"ORGANIZATION"}` 空集也通过 | `tests/test_security_hardening.py`（`EntityTypesFilterTest`）、`presidio_pii/chinese_recognizers.py`（测试新增 import） | 不再依赖真实语料，直接注入两段完全重叠、类型不同的 `RecognizerResult`：LOCATION(0,10)、ORGANIZATION(0,5)。断言 `_filter_entity_types` 后只剩 ORGANIZATION，且 `_resolve_overlaps` 后区间仍为 (0,5)。反证：把顺序换成「先消解再过滤」→ 长 LOCATION 先吞掉 ORGANIZATION → 结果空集，测试必失败（已实测 `wrong order -> []`）。 |
+| S3 | settingsFile 数据源分裂：guard 端 `REPO` 只认 env，terms 端 `resolveRepo(rawConfig)` 认 `config.repo`，只配 bundle config 时 UI 设置不生效 | `plugins/dsh-pii-guard/lib/index.js` | 新增与 terms 对齐的 `resolveRepo(config)`（`config.repo` > `PII_GUARD_REPO` > 默认，统一 `\\`→`/` 并去尾斜杠）；`REPO`/`SERVER`/`HOOK_LOG`/`GUARD_SETTINGS_FILE` 由 `const` 改 `let`，`apply()` 里新增 `configurePaths(options)` 按实际 config 重算派生路径并清 `_cfg` 缓存。第二参数 `options` 同时兼容宿主传入的 bundle config 与单测注入的 `redact`/`restore` mock（宿主调用约定 `apply(ctx, config)` 见 `cordis/lib/index.js:365`，键名直通）。 |
+
+### 8.2 验证证据
+
+- S13 单文件：`python -m pytest tests/test_security_hardening.py -q --disable-warnings` → **20 passed in 30.16s，exit=0**；反证「先消解再过滤」实测输出 `wrong order -> []`（断言会失败），证明测试不再恒真。
+- S3 JS 烟测：`node tests/js/plugin_terms.mjs` → **63 passed, 0 failed**；`node tests/js/plugin_display.mjs plugins/dsh-pii-guard/lib/index.js` → 全 PASS（含新增「S3 config.repo 覆盖 env」用例）；`node tests/js/plugin_jobs.mjs plugins/dsh-pii-guard/lib/index.js` → `[result] ALL PASS`。S3 专项反证：临时注释掉 `configurePaths(options)` 后，新增用例如期 `FAIL`（visible 被截断，guard 读错 env 旧路径的 off 设置），恢复后 PASS。
+- 全量：`python -m pytest tests/ -q --disable-warnings` → **260 passed, 8 subtests passed in 313.09s，exit=0**，零失败、零回归（S13/S3 最终态）。
+- 宿主调用约定调研（只读，子 agent）：`cordis/lib/index.js:365` `runtime.callback(this.ctx, config)`、`cordis-plugin-loader/lib/index.js:591` `registry.plugin(plugin, this.options.config, ...)` 证实宿主把 yml 条目的 `config` 对象作为第二参数原样传给 `apply`；官方插件 `dsh-skill-filesystem` 以 `apply(ctx, config)` 读取同名键为佐证。

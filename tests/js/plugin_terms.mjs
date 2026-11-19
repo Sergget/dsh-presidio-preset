@@ -8,12 +8,14 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const HOST_HALF = 'E:/Code/dsh-presidio-preset/plugins/dsh-pii-guard-terms/lib/index.js';
+// FIX-1: 从测试文件位置推断仓库根（tests/js -> ../..），不再写死作者机器路径。
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const HOST_HALF = join(REPO, 'plugins', 'dsh-pii-guard-terms', 'lib', 'index.js');
 
 const { apply, name: HOST_NAME } = await import(pathToFileURL(HOST_HALF).href);
 

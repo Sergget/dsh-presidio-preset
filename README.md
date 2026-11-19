@@ -19,6 +19,61 @@
 - **格式覆盖**：可脱敏/还原 `.docx`（段落、表格、页眉页脚、文本框、批注、修订、脚注）、`.xlsx`（单元格与批注）、`.pptx`（文本框、表格、备注），以及 `.txt`、`.md`、`.csv`、`.json`、`.xml`、`.html`、`.eml`、`.rtf`。`.pdf`、`.doc`、`.xls` 为**只读检测**——可扫描识别但不能写回。
 - **白名单**：指定关键词不替换——CLI 用 `--whitelist FILE`（每行一个词）或 `--keep TERM`，DSH preset 用 `PII_DSH_WHITELIST`。与白名单区域重叠的实体一律保留。
 
+## 安装与部署
+
+> **安全默认值（fail-closed）**：脱敏服务（Python 侧）异常时，守卫插件**默认阻断相关工具调用**，不放行明文——宁可暂时不可用，也不泄漏 PII。设置页的「失败时透传（fail-open）」仅用于排障，开启后服务异常会放行原文，**显著降低防护**，排查完请立即关闭。
+
+**Python 版本**：支持 **3.9 / 3.10 / 3.11 / 3.12 / 3.13**（`pyproject.toml` 声明 `requires-python = ">=3.9"`）。安装前先确认：
+
+```powershell
+python --version   # 必须是 3.9~3.13
+```
+
+### 一键安装（推荐）
+
+```powershell
+# -Repo 为仓库根（默认脚本所在目录），-DshHome 默认取 $env:DSH_HOME
+pwsh -NoProfile -File tools/install.ps1 -Repo . -DshHome $env:DSH_HOME
+
+# 只想预览将做什么、不落盘
+pwsh -NoProfile -File tools/install.ps1 -Repo . -DshHome $env:DSH_HOME -DryRun
+```
+
+脚本会把 `cordis.patch.yml` 模板里的 `__REPO__`/`__DSH_HOME__` 占位符替换为实际路径，并把 guard 插件安装到 `<DSH_HOME>/plugins/dsh-pii-guard/lib/index.js`。安装后在 **DSH 会话内**（不是普通 PowerShell）用 `plugin_manager list_bundles` 确认 `@local/dsh-presidio-pii-preset` 与 `dsh-pii-guard-terms` 已启用，然后**完全重启 DSH**。
+
+> `bundle patch` 通过 `link` 注入，**不会写进 profile 的 patch 文件**——用文本搜索 profile 配置找不到插件条目是正常的，不要用 grep 判断是否生效，要用 `plugin_manager list_bundles`。
+
+### 离线安装（无网络 / 内网）
+
+`release/` 目录随仓库提供预构建的 wheel（`presidio_pii_dsh-0.1.0-py3-none-any.whl`，哈希见同目录 manifest），无需从 PyPI 拉取重型依赖：
+
+```powershell
+pip install --no-index --find-links release presidio_pii_dsh-0.1.0-py3-none-any.whl
+```
+
+### 安装后自检
+
+```powershell
+pwsh -NoProfile -File tools/verify_install.ps1 -Repo . -DshHome $env:DSH_HOME
+```
+
+逐项检查 Python 导入、CLI demo、bundle 启用、插件一致性、路径无漂移。`bundle enabled` 一项若在无 `plugin_manager` 命令的普通 shell 中运行会显示 SKIP 并给出 DSH 会话内的验证指引——这不是失败。
+
+### 网络 / git / SSL 排障
+
+若 `git clone`、`pip install` 因网络或证书失败：
+
+1. 确认代理与证书链：`git config --global http.sslVerify`、企业内网需配置 `http.proxy` / `https.proxy` 或受信任的 CA 证书。
+2. 绕开 git：直接从仓库 Release 页或内网镜像下载 **zip 包**解压，再走上面的「一键安装」——安装脚本不依赖 git。
+3. 绕开 PyPI：走上面的「离线安装」，用 `release/` 内的 wheel。
+
+### 手动安装（不用脚本）
+
+1. `pip install -e .`（或离线 wheel）。
+2. 将 `cordis.patch.yml` 中的 `__REPO__`/`__DSH_HOME__` 占位符手动替换为实际路径。
+3. 复制 `plugins/dsh-pii-guard/lib/index.js` 到 `<DSH_HOME>/plugins/dsh-pii-guard/lib/index.js`。
+4. 在 DSH 会话内 `plugin_manager install_bundle` 安装 preset bundle 与 `plugins/dsh-pii-guard-terms`，重启 DSH。
+
 ## 快速开始
 
 ```bash
