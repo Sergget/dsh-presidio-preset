@@ -221,7 +221,11 @@ def check_restore_wiring() -> dict:
 
 
 def DISPLAY_MODE_SUPPORTED(src: str) -> bool:
-    return 'DISPLAY_MODE' in src and 'mask' in src and 'full' in src
+    # 2026-11-18 起显示模式改为动态配置（guard-settings.json），裸 DISPLAY_MODE
+    # 常量已被 coerceDisplayMode()/displayMode() 取代。兼容新旧两种实现形态。
+    mode_api = ('DISPLAY_MODE' in src or 'coerceDisplayMode' in src
+                or 'displayMode()' in src)
+    return mode_api and 'mask' in src and 'full' in src and 'off' in src
 
 
 # --------------------------------------------------------------------------- #
@@ -264,7 +268,12 @@ def check_formats() -> dict:
                                 # v0.3：meta/value 重渲染，堵住 read/grep 的 meta.lines 原文
                                 "redactValueLeaves", "pairs.sort",
                                 "value: redactValueLeaves(result.value, pairs)",
-                                "result?.meta !== undefined") if pat not in src]
+                                "result?.meta !== undefined",
+                                 # v0.5：P0/P1 设置页动态生效（guard-settings.json 单一数据源）
+                                 "GUARD_SETTINGS_FILE", "readSettings", "ENV_FALLBACK",
+                                 "coerceDisplayMode", "displayMode()", "isFailOpen()",
+                                 "isShellDisabled()", "getAllowlist()",
+                                 ) if pat not in src]
 
     # v0.4：用户自定义屏蔽词 UI（dsh-pii-guard-terms 设置页）
     terms_src = REPO / "plugins" / "dsh-pii-guard-terms"
@@ -282,23 +291,39 @@ def check_formats() -> dict:
             "normalizeTerms", "writeTerms", "readTerms", "escapeLiteral",
             "ctx.inject(['webServer']",
             "dsh-pii-guard-terms",
+            # v0.5：P0/P1 设置 API + S1 精确会话 cookie + S2 路径漂移告警
+            "/api/dsh-pii-guard/settings", "/api/dsh-pii-guard/settings/save",
+            "sessionCookieName", "hasSessionCookie", "dsh-auth-",
+            "readSettings", "normalizeSettings", "writeSettings", "warnIfPathDrift",
         ) if pat not in host_src]
         client_missing = [pat for pat in (
             "settings.section", "settings.section.icon", "pii-guard-terms",
             "dsh-pii-guard-terms", "api/dsh-pii-guard/terms",
             "__ModuleLoader__.load", "return exports",
+            # v0.5：前端设置分节（屏蔽词+防护配置合并进单一菜单 PiiGuardSection）
+            "api/dsh-pii-guard/settings", "SettingsSection", "PiiGuardSection",
         ) if pat not in client_src]
         terms_missing = terms_missing + host_missing + client_missing
         terms_ev = (f"terms={'ok' if not terms_missing else '缺:' + ','.join(terms_missing)}; ")
 
-    # 用户屏蔽词接线：preset.custom_rules_path 必须指向规则文件，且占位规则不可为空数组
+    # 用户屏蔽词接线：preset.custom_rules_path 必须指向规则文件，且占位规则不可为空数组。
+    # S2 加强：必须与 UI termsFile（默认或 env PII_GUARD_TERMS_FILE）交叉校验，
+    # 否则两边路径漂移后，UI 保存的词条静默不生效。
     preset_p = REPO / ".agent-presets" / "presidio-pii" / "preset.json"
     wiring_ev, wiring_ok = "terms_wiring=missing", False
     try:
         cfg = json.loads(preset_p.read_text(encoding="utf-8")).get("config") or {}
         crp = cfg.get("custom_rules_path")
-        wiring_ok = isinstance(crp, str) and crp.strip() != ""
-        wiring_ev = f"terms_wiring={'ok' if wiring_ok else 'unset'}({crp})"
+        crp_ok = isinstance(crp, str) and crp.strip() != ""
+        # UI 侧实际写入文件：env 覆盖优先，否则插件默认值
+        ui_terms = os.environ.get("PII_GUARD_TERMS_FILE") or str(
+            REPO / ".pii_presidio_store" / "user_terms_rules.json")
+        resolved_crp = str((REPO / crp.strip()).resolve()) if crp_ok else ""
+        norm = lambda p: str(p).replace("\\", "/").rstrip("/").lower()
+        cross_ok = crp_ok and norm(resolved_crp) == norm(str(Path(ui_terms).resolve()))
+        wiring_ok = crp_ok and cross_ok
+        wiring_ev = (f"terms_wiring={'ok' if wiring_ok else 'MISMATCH'}"
+                     f"(preset={crp!r}-> {resolved_crp}; ui={ui_terms!r})")
     except (OSError, ValueError) as exc:  # pragma: no cover - 配置损坏
         wiring_ev = f"terms_wiring=error({exc.__class__.__name__})"
 
@@ -309,13 +334,18 @@ def check_formats() -> dict:
                             cwd=REPO, timeout=180)
         rc_disp, out_disp = run([node, "tests/js/plugin_display.mjs", str(PLUGIN_SRC)],
                                 cwd=REPO, timeout=120)
-        js_ok = rc_js == 0 and rc_disp == 0
+        rc_terms, out_terms = run([node, "tests/js/plugin_terms.mjs"],
+                                  cwd=REPO, timeout=120)
+        js_ok = rc_js == 0 and rc_disp == 0 and rc_terms == 0
         js_ev = (f"js_smoke={'pass' if rc_js == 0 else 'fail'}"
-                 f"/display={'pass' if rc_disp == 0 else 'fail'}")
+                 f"/display={'pass' if rc_disp == 0 else 'fail'}"
+                 f"/terms={'pass' if rc_terms == 0 else 'fail'}")
         if rc_js != 0:
-            js_ev += f" ({tail(out_js, 1)})"
+            js_ev += f" (jobs: {tail(out_js, 1)})"
         if rc_disp != 0:
-            js_ev += f" ({tail(out_disp, 1)})"
+            js_ev += f" (display: {tail(out_disp, 1)})"
+        if rc_terms != 0:
+            js_ev += f" (terms: {tail(out_terms, 1)})"
 
     # 仓库副本 vs 已安装副本：防止“改了一份、跑的是另一份”
     if PLUGIN.is_file():
@@ -365,6 +395,55 @@ def check_formats() -> dict:
 # --------------------------------------------------------------------------- #
 # 6. 依赖漏洞
 # --------------------------------------------------------------------------- #
+_PROJECT_MANIFEST = REPO / "pyproject.toml"
+
+
+def _project_requirements() -> list[str]:
+    """读取 pyproject.toml 的 [project].dependencies。
+
+    门禁审计对象是**本包的依赖闭包**，不是构建机上的整个 site-packages。
+    宿主环境里与本包无关的包（例如 mcp 带进来的 opentelemetry-api）不该
+    算作本包的漏洞，否则门禁会随开发机装了什么而漂移；反过来，闭包内的
+    间接依赖必须一并审计，不能只看直接依赖。
+    """
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python < 3.11
+        return []
+    try:
+        data = tomllib.loads(_PROJECT_MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    deps = (data.get("project") or {}).get("dependencies") or []
+    return [str(d).strip() for d in deps if str(d).strip()]
+
+
+def _resolve_closure(requires: list[str], report: Path) -> tuple:
+    """用 pip 的 --dry-run --report 解析完整闭包（含间接依赖）。
+
+    返回 (name==version 列表, 失败说明)。
+    """
+    if not requires:
+        return [], "pyproject.toml 读不到 [project].dependencies"
+    rc, text = run([sys.executable, "-m", "pip", "install", "--dry-run",
+                    "--ignore-installed", "--quiet",
+                    "--report", str(report), *requires], timeout=600)
+    if rc != 0 or not report.is_file():
+        return [], tail(text, 2)
+    try:
+        data = json.loads(report.read_text(encoding="utf-8"))
+    except ValueError:
+        return [], "pip --report 输出不是合法 JSON"
+    seen = {}
+    for item in data.get("install") or []:
+        meta = item.get("metadata") or {}
+        name = str(meta.get("name") or "").strip().lower()
+        ver = str(meta.get("version") or "").strip()
+        if name and ver:
+            seen[name] = ver
+    return [f"{n}=={v}" for n, v in sorted(seen.items())], ""
+
+
 def check_deps() -> dict:
     rc_check, out_check = run([sys.executable, "-m", "pip", "check", "--disable-pip-version-check"])
     versions = fmt_versions()
@@ -372,38 +451,46 @@ def check_deps() -> dict:
         return {"status": FAIL, "evidence": f"{versions}; pip check: {tail(out_check, 3)}",
                 "reason": "存在破损依赖"}
 
+    requires = _project_requirements()
+    tmp = Path(tempfile.mkdtemp(prefix="gate_audit_"))
+    closure, why = _resolve_closure(requires, tmp / "report.json")
+    if not closure:
+        shutil.rmtree(tmp, ignore_errors=True)
+        if not online():
+            return {"status": SKIP, "evidence": f"{versions}; pip check OK",
+                    "reason": "离线无法解析依赖闭包，未做漏洞比对"}
+        return {"status": FAIL, "evidence": f"{versions}; resolve: {why}",
+                "reason": "无法解析本包依赖闭包"}
+
     tool = shutil.which("pip-audit")
     if not tool:
         uvx = shutil.which("uvx") or r"C:\Users\sergg\.local\bin\uvx.exe"
-        if Path(uvx).exists():
-            audit_cmd = [uvx, "pip-audit"]
-        else:
-            audit_cmd = None
+        audit_cmd = [uvx, "pip-audit"] if Path(uvx).exists() else None
     else:
         audit_cmd = [tool]
-
     if not audit_cmd:
-        return {"status": SKIP, "evidence": f"{versions}; pip check OK",
+        shutil.rmtree(tmp, ignore_errors=True)
+        return {"status": SKIP, "evidence": f"{versions}; closure={len(closure)} pkgs",
                 "reason": "未找到 pip-audit / uvx，无法做漏洞库比对"}
     if not online():
-        return {"status": SKIP, "evidence": f"{versions}; pip check OK",
+        shutil.rmtree(tmp, ignore_errors=True)
+        return {"status": SKIP, "evidence": f"{versions}; closure={len(closure)} pkgs",
                 "reason": "当前离线，pip-audit 无法拉取漏洞库（不视为通过）"}
 
-    req = Path(tempfile.mkdtemp(prefix="gate_audit_")) / "req.txt"
-    rc_fr, freeze = run([sys.executable, "-m", "pip", "freeze", "--disable-pip-version-check"])
-    kept = [ln for ln in freeze.splitlines()
-            if ln and not ln.startswith(("#", " ", "-e")) and "git+ssh" not in ln]
-    req.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    req = tmp / "req.txt"
+    req.write_text("\n".join(closure) + "\n", encoding="utf-8")
     rc, out = run([*audit_cmd, "-r", str(req)], timeout=600)
     low = out.lower()
+    shutil.rmtree(tmp, ignore_errors=True)
+    scope = f"closure={len(closure)}pkgs"
     if "no known vulnerabilities" in low:
-        return {"status": PASS, "evidence": f"{versions}; pip check OK; pip-audit 0",
-                "reason": "无已知漏洞"}
+        return {"status": PASS, "evidence": f"{versions}; {scope}; pip-audit 0",
+                "reason": "本包依赖闭包无已知漏洞"}
     if rc != 0 and any(s in low for s in ("connection", "resolve", "timed out", "network", "temporary failure")):
-        return {"status": SKIP, "evidence": f"{versions}; audit: {tail(out, 3)}",
+        return {"status": SKIP, "evidence": f"{versions}; {scope}; audit: {tail(out, 3)}",
                 "reason": "漏洞库连接失败（离线或网络受限）"}
-    return {"status": FAIL, "evidence": f"{versions}; audit: {tail(out, 4)}",
-            "reason": "pip-audit 报告漏洞或执行失败"}
+    return {"status": FAIL, "evidence": f"{versions}; {scope}; audit: {tail(out, 4)}",
+            "reason": "本包依赖闭包存在已知漏洞"}
 
 
 # --------------------------------------------------------------------------- #
@@ -424,6 +511,16 @@ _SECRET_PATTERNS = [
 _SAFE_VALUE = re.compile(
     r"(?i)^(Tuple\[|List\[|Dict\[|Optional\[|Callable\[|str|int|bool|None|"
     r"os\.environ|getenv|\$\{|<|\[|\"\"|''|\*{3}|xxx|your[_-])")
+# 值本身是一个「求值表达式」而非字面量，就不是泄露的凭据：
+# 例如 hooks.py 的 `secret = secrets.token_bytes(32)`——这是运行时生成随机密钥，
+# 恰恰是安全实践，不该被算成硬编码密钥。只放行明显是调用/属性的形态。
+_SAFE_EXPR = re.compile(
+    r"(?i)^(?:"
+    r"secrets\.|uuid\.|hmac\.|hashlib\.|base64\.|os\.|sys\.|Path\("
+    r"|[\w.]+\("          # 任意函数调用 foo(...)
+    r"|[\w.]+\.[\w.]+"    # 任意属性访问 a.b.c
+    r")"
+)
 
 
 def _mask(s: str) -> str:
@@ -440,7 +537,8 @@ def _scan_text(text: str, where: str) -> tuple:
         for name, rx in _SECRET_PATTERNS:
             for m in rx.finditer(body):
                 value = m.group(2) if name == "assign" and m.lastindex else m.group(0)
-                if name == "assign" and _SAFE_VALUE.search(value or ""):
+                if name == "assign" and (_SAFE_VALUE.search(value or "")
+                                         or _SAFE_EXPR.search(value or "")):
                     suppressed += 1
                     continue
                 hits.append((name, where, _mask(m.group(0))))

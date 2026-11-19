@@ -896,7 +896,7 @@ _JOB_RIGHT_OK = set("一的等了和与及兼、，。；：）】》\"'")
 class ChineseJobTitleRecognizer(LightRecognizer):
     """职务词表匹配 + 右边界。
 
-    "政协委员履职" 里的 "委员" 后面跟着 "履", 属于词内切分, 不算职务。
+    "委员会履职" 里的 "委员" 后面跟着 "履", 属于词内切分, 不算职务。
     """
 
     def __init__(self):
@@ -910,7 +910,7 @@ class ChineseJobTitleRecognizer(LightRecognizer):
         for m in self.regex.finditer(text):
             start, end = m.start(), m.end()
             if bounds is not None:
-                # "政协委员" 是一个词, 内部的 "委员" 不与边界对齐 -> 丢弃
+                # "委员会" 是一个词, 内部的 "委员" 不与边界对齐 -> 丢弃
                 if start not in bounds or end not in bounds:
                     continue
             elif end < len(text) and _is_cjk(text[end]) and text[end] not in _JOB_RIGHT_OK:

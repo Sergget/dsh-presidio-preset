@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import datetime as _dt
 import hashlib
+import hmac
 import json
 import os
+import secrets
 import sys
 from pathlib import Path
 from typing import Tuple
@@ -135,15 +137,104 @@ def _whitelist() -> list:
             if ln.strip() and not ln.strip().startswith("#")]
 
 
+class PresetUnreadable(Exception):
+    """preset.json 存在但读不出来（解析失败/IO 错误）。
+
+    与「字段缺失」必须区分：字段缺失是合法的「全部启用」，而读不出来是
+    异常状态，调用方要么保留旧值（热更新），要么走安全的默认值（首次加载）。
+    如果不区分，一次写坏 preset 就会把用户收窄的类型集合悄悄重置成全开。
+    """
+
+
+def _entity_types() -> list:
+    """启用的实体类型白名单: env > preset 顶层 entity_types > 全部启用。
+
+    preset.json 里 entity_types 是顶层字段（与 hooks 同级），不是 config 段
+    的成员——设置页勾选的就是它。空列表/缺失都表示全部类型启用。
+
+    文件存在但解析失败时抛 PresetUnreadable，绝不静默返回空列表。
+    """
+    raw = os.environ.get("PII_DSH_ENTITY_TYPES")
+    if raw is None:
+        fp = _preset_file()
+        if fp.exists():
+            try:
+                data = json.loads(fp.read_text(encoding="utf-8-sig"))
+            except (OSError, ValueError) as exc:
+                raise PresetUnreadable(f"{fp}: {exc}") from exc
+            raw = data.get("entity_types")
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        raw = [t for t in raw.replace(";", ",").split(",")]
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [str(t).strip() for t in raw if str(t).strip()]
+
+
+_PRESET_SIG: tuple | None = None
+
+
+def _preset_signature() -> tuple | None:
+    """preset.json 的 (mtime_ns, size) 签名; 文件不存在时返回 None。"""
+    try:
+        st = _preset_file().stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _maybe_reload_preset(engine: PresidioPIIEngine) -> None:
+    """preset.json 变了就热更新实体类型与白名单, 无需重启 DSH。
+
+    UI 改勾选/白名单路径后写 preset.json, 下次调用即生效。只比对 mtime+size,
+    一次 stat 的开销可忽略。
+
+    读取失败时**保留旧值**（宁可沿用上一次已知good配置，也不把用户收窄的
+    集合静默重置成全开）。实体类型与白名单分开 try, 互不影响。
+    """
+    global _PRESET_SIG
+    sig = _preset_signature()
+    if sig == _PRESET_SIG:
+        return
+    try:
+        engine.set_entity_types(_entity_types())
+    except PresetUnreadable as exc:
+        print(f"[pii] preset 实体类型读取失败, 保留旧值: {exc}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — 热更新失败不得中断脱敏
+        print(f"[pii] 实体类型热更新失败, 保留旧值: {exc}", file=sys.stderr)
+
+    try:
+        engine.set_whitelist(_whitelist())
+    except Exception as exc:  # noqa: BLE001
+        print(f"[pii] 白名单热更新失败, 保留旧值: {exc}", file=sys.stderr)
+
+    # 即使读取失败也推进签名: 坏状态只告警一次, 不刷屏;
+    # 用户修好文件后 mtime+size 变化会再次触发.
+    _PRESET_SIG = sig
+
+
 def _get_engine() -> PresidioPIIEngine:
-    global _ENGINE
+    global _ENGINE, _PRESET_SIG
     if _ENGINE is None:
         # 传规则来源字符串而非已加载列表, 让引擎能按文件签名热更新;
         # 来源已在此处合并 (env > preset)
+        try:
+            entity_types = _entity_types()
+        except PresetUnreadable as exc:
+            # 首次加载读不出 preset 时回退到「全部启用」——这是多脱敏方向,
+            # 宁可过度脱敏也不能因为配置坏了就漏脱敏.
+            print(f"[pii] preset 实体类型读取失败, 暂时启用全部类型: {exc}",
+                  file=sys.stderr)
+            entity_types = []
         _ENGINE = PresidioPIIEngine(
             db_path=_db_path(), whitelist=_whitelist(),
             custom_rules=_custom_rules_spec(),
-            rules_check_interval=_rules_reload_interval())
+            rules_check_interval=_rules_reload_interval(),
+            entity_types=entity_types)
+        _PRESET_SIG = _preset_signature()
+    else:
+        _maybe_reload_preset(_ENGINE)
     return _ENGINE
 
 
@@ -179,9 +270,11 @@ def _log_max_bytes() -> int:
 
 def reset_singleton() -> None:
     """测试辅助: 清空引擎/日志单例 (环境变量变更后调用)。"""
-    global _ENGINE, _JOURNAL
+    global _ENGINE, _JOURNAL, _HMAC_KEY, _PRESET_SIG
     _ENGINE = None
     _JOURNAL = None
+    _HMAC_KEY = None
+    _PRESET_SIG = None
 
 
 def session_id(conversation_id: str | None) -> str:
@@ -199,9 +292,54 @@ def _entity_counts(placeholders: dict) -> dict:
     return counts
 
 
+_HMAC_KEY: bytes | None = None
+
+
+def _hmac_key() -> bytes:
+    """日志指纹密钥: PII_DSH_LOG_HMAC_KEY > 映射库同目录的 journal_hmac.key > 首次生成。
+
+    密钥与映射库同目录（默认 .pii_presidio_store/），已在 .gitignore 内。
+    生成用 0600 权限（Windows 上按当前用户 ACL 收紧），避免同机其他账号读取。
+    """
+    global _HMAC_KEY
+    if _HMAC_KEY is not None:
+        return _HMAC_KEY
+    env = os.environ.get("PII_DSH_LOG_HMAC_KEY")
+    if env:
+        _HMAC_KEY = env.encode("utf-8")
+        return _HMAC_KEY
+    key_file = _db_path().parent / "journal_hmac.key"
+    try:
+        data = key_file.read_bytes()
+        if data:
+            _HMAC_KEY = data
+            return _HMAC_KEY
+    except OSError:
+        pass
+    secret = secrets.token_bytes(32)
+    try:
+        key_file.parent.mkdir(parents=True, exist_ok=True)
+        key_file.write_bytes(secret)
+        try:
+            os.chmod(key_file, 0o600)
+        except OSError:
+            pass
+    except OSError as exc:
+        # 落盘失败时退回进程内密钥: 日志仍不可反查, 但重启后指纹不再一致
+        print(f"[pii] 无法写入日志密钥 ({key_file}): {exc}", file=sys.stderr)
+    _HMAC_KEY = secret
+    return _HMAC_KEY
+
+
 def _fingerprint(text: str) -> str:
-    """内容指纹: 单向 SHA256 前 16 位, 不足以还原原文。"""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    """内容指纹: HMAC-SHA256 前 16 位, 无密钥不可反查。
+
+    裸 SHA256 对短文本（如 11 位手机号、18 位身份证）可被暴力枚举反推原文,
+    因此改用带本地密钥的 HMAC: 没有 ``journal_hmac.key`` 就算拿到日志也无法
+    逐条试出原文。密钥首次使用时随机生成并落到映射库同目录（已被 .gitignore
+    排除）；``PII_DSH_LOG_HMAC_KEY`` 可显式指定, 便于多机比对同一批日志。
+    """
+    return hmac.new(_hmac_key(), text.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
 
 
 def _id_fingerprint(value: str | None) -> str | None:

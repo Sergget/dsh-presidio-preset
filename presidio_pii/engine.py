@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import dataclass, field
 from typing import Dict, List
 
@@ -68,8 +69,29 @@ class PresidioPIIEngine:
     rules_check_interval: 热更新检查间隔 (秒), <=0 关闭自动检查。
     """
 
+    @staticmethod
+    def _known_entity_types(rule_set) -> set:
+        """当前合法实体类型全集 = 内置识别器类型 ∪ 自定义规则类型。"""
+        builtin = {getattr(rec, "entity_type", None) for rec in get_chinese_recognizers()}
+        custom = {getattr(r, "entity_type", None) for r in rule_set.rules}
+        return {t for t in (builtin | custom) if t}
+
+    def _sanitize_entity_types(self, types) -> set:
+        """过滤掉未知/拼错的实体类型名，避免误配置导致静默零脱敏。"""
+        raw = {t for t in (types or []) if t}
+        if not raw:
+            return set()
+        known = self._known_entity_types(self._rule_set)
+        valid = {t for t in raw if t in known}
+        unknown = raw - valid
+        if unknown:
+            print(f"[pii] 忽略未知实体类型 {sorted(unknown)}；合法类型: {sorted(known)}",
+                  file=sys.stderr)
+        # 全部无效 → 归一为空集合，_filter_entity_types 视为全开（fail toward 多脱敏）
+        return valid
+
     def __init__(self, db_path=None, whitelist=None, custom_rules=None,
-                 rules_check_interval: float = 1.0):
+                 rules_check_interval: float = 1.0, entity_types=None):
         self._builtin_recognizers = get_chinese_recognizers()
         if isinstance(custom_rules, CustomRuleSet):
             self._rule_set = custom_rules
@@ -82,6 +104,10 @@ class PresidioPIIEngine:
             self._rule_set = CustomRuleSet(check_interval=rules_check_interval)
         self.registry = SessionRegistry(db_path) if db_path else SessionRegistry()
         self.whitelist = [w for w in (whitelist or []) if w]
+        # 只保留用户勾选的实体类型; None/空 = 全开（保持默认行为向后兼容）。
+        # 未知/拼错的类型名会被告警忽略；若配置的全部类型都无效，归一为空集合（全开），
+        # 避免把识别结果全部过滤掉造成静默零脱敏（fail-open 漏 PII）。
+        self.entity_types = self._sanitize_entity_types(entity_types)
         self._sync_recognizers()
 
     @property
@@ -106,6 +132,14 @@ class PresidioPIIEngine:
 
     def set_whitelist(self, terms) -> None:
         self.whitelist = [w for w in (terms or []) if w]
+
+    def set_entity_types(self, types) -> None:
+        """设置启用的实体类型集合; 传 None 或空集合表示全部启用。
+
+        未知/拼错的类型名被告警忽略；全部无效时归一为空集合（全开），
+        避免热更新把合法类型换成拼错类型后静默零脱敏。
+        """
+        self.entity_types = self._sanitize_entity_types(types)
 
     # ---- 白名单 ----
     def _protected_spans(self, text: str) -> List[tuple]:
@@ -157,7 +191,23 @@ class PresidioPIIEngine:
         # 去重 & 冲突处理 (使用含自定义优先级的表)
         results = self._trim_spans(text, results)
         results = self._drop_uuid_spans(text, results)
+        results = self._filter_entity_types(results)
         return self._resolve_overlaps(results, self._prio)
+
+    def _filter_entity_types(self, results: List[RecognizerResult]) -> List[RecognizerResult]:
+        """按 preset 的 entity_types 白名单过滤; 空集合表示不限制。
+
+        在冲突消解**之前**过滤, 这样被关掉的类型不会抢占同区间的其他类型
+        （例如关掉 LOCATION 后, 该区间的 ORGANIZATION 仍能被正常识别脱敏）。
+
+        自定义规则产出的类型（USER_TERM 等）**始终保留**：它们是用户显式
+        配置的屏蔽词, 不该被内置类型的勾选列表顺手关掉。
+        """
+        if not self.entity_types:
+            return results
+        custom = {getattr(r, "entity_type", None) for r in self._rule_set.rules}
+        allowed = self.entity_types | {t for t in custom if t}
+        return [r for r in results if r.entity_type in allowed]
 
     @staticmethod
     def _trim_spans(text: str, results: List[RecognizerResult]) -> List[RecognizerResult]:

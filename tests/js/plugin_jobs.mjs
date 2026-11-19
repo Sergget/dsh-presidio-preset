@@ -387,6 +387,37 @@ async function runTool(tool, text, opts = {}) {
         !out2.includes("WORKFLOW-GUIDE"), out2);
 }
 
+// 21. shell 路径豁免要逐个实体判定：目录片段里的机构名放行，正文里的机构名仍脱敏。
+{
+  const shellDeps = {
+    redact: async (t) => {
+      const map = {};
+      let redacted = t;
+      if (t.includes("某某科技")) {
+        map["⟦PII:ORGANIZATION:0001⟧"] = "某某科技";
+        redacted = redacted.replaceAll("某某科技", "⟦PII:ORGANIZATION:0001⟧");
+      }
+      if (t.includes("乙乙咨询")) {
+        map["⟦PII:ORGANIZATION:0002⟧"] = "乙乙咨询";
+        redacted = redacted.replaceAll("乙乙咨询", "⟦PII:ORGANIZATION:0002⟧");
+      }
+      return { redacted, map };
+    },
+    restore: async (t) => t,
+  };
+  const localHandlers = {};
+  await apply({ on: (evt, fn) => { localHandlers[evt] = fn; } }, shellDeps);
+  const res = await localHandlers["tools/post-execute"](
+    { name: "pwsh", args: { command: "Get-ChildItem" }, agent: { ctx: {} } },
+    { content: [{ type: "text", text: "E:/data/某某科技/报告.txt 由乙乙咨询出具" }] },
+    async () => ({ kind: "accept" }),
+  );
+  const out = res.content.map((b) => b.text || "").join("\n");
+  // 路径片段里的机构名还原为原文，正文里的仍保留占位符
+  check("路径中的机构名豁免脱敏", out.includes("某某科技"), out);
+  check("正文中的机构名仍脱敏", out.includes("⟦PII:ORGANIZATION:0002⟧") && !out.includes("乙乙咨询"), out);
+}
+
 function byteLength(s) {
   return Buffer.byteLength(s, "utf8");
 }

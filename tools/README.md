@@ -48,8 +48,8 @@ python tools/standalone_check.py 报告.docx --report out.json --keep   # 保留
 
 ```bash
 python tools/dsh_sim.py \
-  --turn "张伟的身份证是110101199003077890,帮我查一下" \
-  --turn "再查一下李明的手机号 13800138000" \
+  --turn "化名张三的身份证是 000000000000000000,帮我查一下" \
+  --turn "再查一下化名李四的手机号 13800000000" \
   --conversation-id demo-001
 ```
 
@@ -70,7 +70,7 @@ mock LLM 会像真实模型一样在回复中原样引用占位符, 因此能验
 // incoming: LLM 返回 + 还原结果
 {"event": "turn", "turn_no": 1, "stage": "incoming", "conversation_id": "demo-001",
  "llm_response": "[模拟LLM] ...⟦PII:PERSON:0001⟧...",
- "restored": "[模拟LLM] ...张伟...", "n_restored": 2,
+ "restored": "[模拟LLM] ...化名张三...", "n_restored": 2,
  "n_unrestored": 0, "placeholders_left": 0}
 ```
 
@@ -149,7 +149,7 @@ python tools/gen_corpus_v2.py --out testdata_v2 --per-type 12 --seed 42
 - 真值 2400+ 条，含字段名（`姓名`/`身份证号`/`岗位`…）与 `hard` 标记
 - 身份证校验位有效、银行卡通过 Luhn；全部为虚构数据
 - `manifest.json` 记录每份文档的类型、格式与真值；`whitelist.txt` 为白名单示例
-- 基础版式由代码生成（`docs/SOURCES.md` 记录了模板下载尝试与不可用原因）
+- 基础版式由代码生成（模板下载尝试与不可用原因见 `docs/archive/SOURCES.md`）
 
 ## 7. 沙箱友好核对工具 — `verify_check.py`
 

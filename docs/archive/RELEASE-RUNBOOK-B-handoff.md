@@ -15,14 +15,14 @@
 
 1. **同步插件到安装位**（DSH 运行中文件被锁）：
    完全退出 DSH → 托盘右键「完全退出」→ 然后：
-   Copy-Item 'E:\Code\dsh-presidio-preset\plugins\dsh-pii-guard\lib\index.js' `
-             'E:\Code\dsh_home\plugins\dsh-pii-guard\lib\index.js' -Force
+   Copy-Item '<仓库根目录>/plugins/dsh-pii-guard/lib/index.js' `
+             '<DSH_HOME>/plugins/dsh-pii-guard/lib/index.js' -Force
    （脚本也会自动校验 drift。）
 
 2. **重建 wheel 并更新清单**（沙箱 TEMP/venv 写权限受限，4 种构建方式全部被拦）：
    在正常 PowerShell 里：
    $env:SOURCE_DATE_EPOCH='1700000000'
-   cd E:\Code\dsh-presidio-preset
+   cd <仓库根目录>
    python -m pip wheel . --no-deps -w dist --disable-pip-version-check
    两次构建比对哈希一致后，把新 SHA256/字节数写进 release/presidio-pii-dsh-0.1.0.json
    （或跑 tools/release_gate.py --only 10 看 tree_digest_match 是否转 True）。

@@ -1,7 +1,8 @@
 // 显示侧还原（方案 B）冒烟: agent/assistant-stream 监听器的同步替换逻辑。
 // 不依赖 Python 服务: 直接注入 phMap（模拟 redact 响应下发的增量映射）。
-// 覆盖: 完整占位符替换、跨 chunk 分裂（扣尾补头）、end 兜底、无 PII 快路径、off 模式。
-import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
+// 覆盖: 完整占位符替换、跨 chunk 分裂（扣尾补头）、end 兜底、无 PII 快路径、
+//       off 模式动态开关（通过 guard-settings.json 即时切换，无需重启）。
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -14,14 +15,33 @@ if (!pluginPath) {
 process.env.PII_GUARD_PY = "pii-guard-no-such-python-xyz"; // 不走真实服务
 process.env.PII_GUARD_DISPLAY = "full";
 
+// 把仓库根指到临时目录，这样 guard-settings.json 可隔离地写入/切换。
+const repoTmp = mkdtempSync(join(tmpdir(), "pii-display-repo-"));
+const storeDir = join(repoTmp, ".pii_presidio_store");
+mkdirSync(storeDir, { recursive: true });
+const settingsFile = join(storeDir, "guard-settings.json");
+process.env.PII_GUARD_REPO = repoTmp.replaceAll("\\", "/");
+
 const tmp = mkdtempSync(join(tmpdir(), "pii-display-"));
 const copy = join(tmp, "plugin.mjs");
 copyFileSync(pluginPath, copy);
 const { apply } = await import(pathToFileURL(copy).href);
 rmSync(tmp, { recursive: true, force: true });
 
+// 进程重启后 phMap 为空，但映射仍保存在 SQLite；显示侧应通过同一 restore IPC
+// 按会话恢复，而不是把其他会话的映射混进来。用 mock 隔离验证接缝与缓存行为。
+const persistent = {
+  sid: "pii-guard-42",
+  restoreCalls: [],
+};
 const handlers = {};
-await apply({ on: (evt, fn) => { handlers[evt] = fn; } }, {});
+await apply({ on: (evt, fn) => { handlers[evt] = fn; } }, {
+  restore: async (text) => {
+    persistent.restoreCalls.push({ text });
+    if (text.includes(PH(1))) return text.replace(PH(1), "持久化姓名");
+    return text;
+  },
+});
 const stream = handlers["agent/assistant-stream"];
 if (!stream) { console.error("FAIL  agent/assistant-stream listener not registered"); process.exit(1); }
 
@@ -35,13 +55,13 @@ function check(name, cond, detail = "") {
 }
 
 // 注入映射（模拟 redact 响应的 map 下发）; 用占位符文本本身构造, 不含 PII
-const PH = (n) => `\u27E6PII:PERSON:${String(n).padStart(4, "0")}\u27EB`;
+const PH = (n) => `\u27E6PII:PERSON:${String(n).padStart(4, "0")}\u27E7`;
 // 通过触发一次假 redact 调用来填 phMap 不可行（服务不存在），直接测内部行为:
-// 无映射时占位符应原样透传（不崩溃、不吞字符）。
+// 无映射且 restore 也查不到时占位符原样透传（不崩溃、不吞字符）。
 {
-  const f = chunk(`hello ${PH(1)} world`, 0);
+  const f = chunk(`hello ${PH(9)} world`, 0);
   stream({ agent, frame: f });
-  check("无映射时占位符原样透传", f.chunk.text === `hello ${PH(1)} world`, f.chunk.text);
+  check("无映射时占位符原样透传（服务失败 fail-safe）", f.chunk.text === `hello ${PH(9)} world`, f.chunk.text);
 }
 
 // 跨 chunk 分裂: 占位符被切成 3 段, 前缀扣住, 拼全后整体透传（仍无映射, 原样）
@@ -82,4 +102,49 @@ const PH = (n) => `\u27E6PII:PERSON:${String(n).padStart(4, "0")}\u27EB`;
   check("start 清扣尾且新流文本干净", f2.chunk.text === "xyz", f2.chunk.text);
 }
 
+// off 模式动态开关: 写入 guard-settings.json(displayMode=off) 后，下一个事件即生效。
+// full 模式下孤立前缀 "⟦PII:PE" 会被扣尾（可见文本不含 PII:PE）；
+// off 模式下 handler 首行 return，frame 不改写，"PII:PE" 原样可见。
+{
+  writeFileSync(settingsFile, JSON.stringify({ displayMode: "off" }), "utf8");
+  const agentOff = { session: { id: "s-off" } };
+  const f = chunk("off 模式前缀 ⟦PII:PE", 0);
+  stream({ agent: agentOff, frame: f });
+  check("off 模式即时生效（不扣尾、原样透传）", f.chunk.text.includes("PII:PE"), `visible=${JSON.stringify(f.chunk.text)}`);
+
+  // 再切回 full，验证即时恢复（同一插件实例，无需重启）
+  writeFileSync(settingsFile, JSON.stringify({ displayMode: "full" }), "utf8");
+  const agentFull = { session: { id: "s-full-again" } };
+  const f2 = chunk("full 模式前缀 ⟦PII:PE", 0);
+  stream({ agent: agentFull, frame: f2 });
+  check("切回 full 即时恢复（扣尾）", !f2.chunk.text.includes("PII:PE"), `visible=${JSON.stringify(f2.chunk.text)}`);
+}
+
+// 进程重启恢复：phMap 为空时，通过 restore IPC 从 SQLite 按会话恢复并回填缓存。
+{
+  const agentNew = { session: { id: "s-restart" } };
+  const f = chunk(`联系人 ${PH(1)}`, 0);
+  stream({ agent: agentNew, frame: f });
+  // 异步恢复在下一拍完成
+  await new Promise((r) => setTimeout(r, 50));
+  const f2 = chunk(`联系人 ${PH(1)}`, 1);
+  stream({ agent: agentNew, frame: f2 });
+  check("重启后从 SQLite 恢复映射", f2.chunk.text === "联系人 持久化姓名", f2.chunk.text);
+  check("restore 被调用", persistent.restoreCalls.length > 0, JSON.stringify(persistent.restoreCalls));
+}
+
+// 缓存命中后不再重复 IPC：同一占位符第二次出现直接用缓存。
+{
+  const before = persistent.restoreCalls.length;
+  const agentCache = { session: { id: "s-cache" } };
+  const f = chunk(`联系人 ${PH(1)}`, 0);
+  stream({ agent: agentCache, frame: f });
+  await new Promise((r) => setTimeout(r, 50));
+  const f2 = chunk(`联系人 ${PH(1)}`, 1);
+  stream({ agent: agentCache, frame: f2 });
+  const after = persistent.restoreCalls.length;
+  check("缓存命中不重复 IPC", after - before <= 1, `before=${before} after=${after}`);
+}
+
+rmSync(repoTmp, { recursive: true, force: true });
 process.exit(failed ? 1 : 0);

@@ -37,7 +37,7 @@
 //     到旧的降级透传语义（仅限排障，默认关闭）。
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 
 const SHELL_TOOLS = new Set(["pwsh", "bash"]);
@@ -56,7 +56,6 @@ const WRITE_TEXT_KEYS = new Set([
 const MAX_JOB_BYTES = 256_000;
 const TRUNC_MARK = "\n[pii-guard] output truncated to 256000 bytes before redaction";
 const BLOCK_MARK = "[pii-guard] PII redaction service unavailable; tool result blocked (fail-closed). Retry, or set PII_GUARD_FAIL_OPEN=1 for troubleshooting.";
-const FAIL_OPEN = (process.env.PII_GUARD_FAIL_OPEN ?? "").toLowerCase() === "1";
 const PY = process.env.PII_GUARD_PY ?? "python";
 // 仓库位置可用 PII_GUARD_REPO 覆盖（默认本机开发路径），便于换机器/目录部署
 const REPO = process.env.PII_GUARD_REPO ?? "E:/Code/dsh-presidio-preset";
@@ -64,23 +63,88 @@ const SERVER = REPO + "/presidio_pii/server.py";
 const HOOK_LOG = REPO + "/.pii_presidio_store/hook_log.jsonl";
 const SID = "pii-guard-" + process.pid;
 const CALL_TIMEOUT_MS = 30_000;
-// 显示侧还原模式: full=完整原值(默认) / mask=打码(Python 端) / off=关闭
-const DISPLAY_MODE = (["full", "mask", "off"].includes(
-  (process.env.PII_GUARD_DISPLAY ?? "full").toLowerCase())
-) ? (process.env.PII_GUARD_DISPLAY ?? "full").toLowerCase() : "full";
 // 占位符完整形态与「疑似前缀」（可能被 chunk 边界截断的尾部）
 const PH_FULL = /⟦PII:[A-Z_]+:\d+⟧/g;
 const PH_TAIL = /⟦(?:PII:[A-Z_]+(?::\d*)?)?$/;
-const SHELL_DISABLED = (process.env.PII_GUARD_SHELL ?? "").toLowerCase() === "off";
-let SHELL_ALLOWLIST = null;
-if (process.env.PII_GUARD_SHELL_ALLOWLIST) {
-  try {
-    SHELL_ALLOWLIST = new RegExp(process.env.PII_GUARD_SHELL_ALLOWLIST);
-  } catch (err) {
-    // 配置写错时按“不放行”处理, 避免静默关闭 shell 拦截
-    console.error(`[pii-guard] invalid PII_GUARD_SHELL_ALLOWLIST, ignored: ${err?.message ?? err}`);
-  }
+
+// ---- 动态配置（单一数据源，P0/P1 即时生效）----
+// 设置页把四项配置写入 .pii_presidio_store/guard-settings.json（被 .gitignore 覆盖，
+// 不含 PII）。本插件每次事件按 mtime+size 读取并缓存：改完下一次工具调用即生效，
+// 无需重启 DSH。文件缺失/字段缺省时回退到进程启动时的 env 值，保持旧部署语义。
+//   displayMode    full | mask | off          显示侧还原模式
+//   failOpen       boolean                    服务异常时透传（仅排障，默认 false=阻断）
+//   shellDisabled  boolean                    true=整个进程不拦 shell/后台任务
+//   shellAllowlist string(RegExp source)      对 pwsh 命令字符串的白名单正则
+const GUARD_SETTINGS_FILE = REPO + "/.pii_presidio_store/guard-settings.json";
+
+function coerceDisplayMode(v) {
+  const s = String(v ?? "").toLowerCase();
+  return ["full", "mask", "off"].includes(s) ? s : "full";
 }
+function coerceShellDisabled(v) {
+  if (v === true) return true;
+  if (v === false || v === null || v === undefined) return false;
+  return ["off", "1", "true", "disabled"].includes(String(v).toLowerCase());
+}
+
+// 进程启动时的 env 兜底（配置文件未覆盖的字段用它）
+const ENV_FALLBACK = {
+  displayMode: coerceDisplayMode(process.env.PII_GUARD_DISPLAY ?? "full"),
+  failOpen: (process.env.PII_GUARD_FAIL_OPEN ?? "").toLowerCase() === "1",
+  shellDisabled: (process.env.PII_GUARD_SHELL ?? "").toLowerCase() === "off",
+  shellAllowlist: process.env.PII_GUARD_SHELL_ALLOWLIST ?? "",
+};
+
+let _cfg = { sig: "", values: null, allowlist: null, allowlistSrc: null };
+
+function readSettings() {
+  let sig = "";
+  try {
+    if (existsSync(GUARD_SETTINGS_FILE)) {
+      const st = statSync(GUARD_SETTINGS_FILE);
+      sig = `${st.mtimeMs}:${st.size}`;
+    }
+  } catch { sig = ""; }
+  if (_cfg.values && sig === _cfg.sig) return _cfg.values;
+  let disk = {};
+  if (sig) {
+    try {
+      const parsed = JSON.parse(readFileSync(GUARD_SETTINGS_FILE, "utf8"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) disk = parsed;
+    } catch { disk = {}; }
+  }
+  const pick = (key) => (Object.hasOwn(disk, key) ? disk[key] : ENV_FALLBACK[key]);
+  const values = {
+    displayMode: coerceDisplayMode(pick("displayMode")),
+    failOpen: Boolean(pick("failOpen")),
+    shellDisabled: coerceShellDisabled(pick("shellDisabled")),
+    shellAllowlist: String(pick("shellAllowlist") ?? ""),
+  };
+  _cfg = { sig, values, allowlist: null, allowlistSrc: null };
+  return values;
+}
+
+function displayMode() { return readSettings().displayMode; }
+function isFailOpen() { return readSettings().failOpen; }
+function isShellDisabled() { return readSettings().shellDisabled; }
+
+function getAllowlist() {
+  const cfg = readSettings();
+  if (_cfg.allowlistSrc === cfg.shellAllowlist) return _cfg.allowlist;
+  let re = null;
+  if (cfg.shellAllowlist) {
+    try {
+      re = new RegExp(cfg.shellAllowlist);
+    } catch (err) {
+      // 正则写错按“不放行”处理，避免静默关闭 shell 拦截
+      console.error(`[pii-guard] invalid PII_GUARD_SHELL_ALLOWLIST, ignored: ${err?.message ?? err}`);
+    }
+  }
+  _cfg.allowlistSrc = cfg.shellAllowlist;
+  _cfg.allowlist = re;
+  return re;
+}
+
 const name = "pii-guard";
 const inject = ["tools"];
 
@@ -105,37 +169,61 @@ function placeholderNotice() {
   };
 }
 
-// 路径/参数脱敏豁免：在 Shell 类工具的输出中，跳过 ORGANIZATION 类型的脱敏。
-const isLikelyPath = (text) => (text.includes("/") || text.includes("\\")) && !text.split(/[\s\n]+/).some(w => w.length > 50);
+// 路径豁免只对「真的处在路径里」的 ORGANIZATION 生效。原来按“整段输出像路径”判断，
+// 会把同一批 shell 输出里所有机构名一并放行（目录名和正文里的公司名混在一起）。
+// 现在逐个实体检查：值本身含分隔符，或它在原文中紧邻分隔符，才认定为路径片段。
+const PATH_SEP = /[\\/]/;
+
+function isPathFragment(text, value) {
+  if (typeof value !== "string" || value === "") return false;
+  if (PATH_SEP.test(value)) return true;
+  let idx = text.indexOf(value);
+  while (idx !== -1) {
+    const before = idx > 0 ? text[idx - 1] : "";
+    const after = idx + value.length < text.length ? text[idx + value.length] : "";
+    if ((before && PATH_SEP.test(before)) || (after && PATH_SEP.test(after))) return true;
+    idx = text.indexOf(value, idx + value.length);
+  }
+  return false;
+}
 
 async function redactExempted(text, exec, redactFn) {
   const fn = redactFn ?? redact;
   const msg = await fn(text);
-  if (exec && SHELL_GUARDED.has(exec.name) && isLikelyPath(text)) {
-    if (msg.map) {
-      for (const [ph, val] of Object.entries(msg.map)) {
-        if (ph.includes("ORGANIZATION")) {
-          msg.redacted = msg.redacted.replace(ph, val);
-          delete msg.map[ph];
-        }
-      }
+  if (exec && SHELL_GUARDED.has(exec.name) && msg?.map) {
+    for (const [ph, val] of Object.entries(msg.map)) {
+      if (!ph.includes("ORGANIZATION")) continue;
+      if (!isPathFragment(text, val)) continue;
+      msg.redacted = msg.redacted.replaceAll(ph, val);
+      delete msg.map[ph];
     }
   }
   // 确保返回 msg 结构符合后续预期
   return msg || { redacted: text, map: {} };
 }
 
+// svc 现在持有「服务实例句柄」而不是裸进程: { proc, pending, rl }。
+// 每个实例有自己独立的 pending，exit/error 回调只处理本实例的等待者，且只在
+// svc 仍指向本实例时才清空全局引用——避免重试时旧进程的回调误清新进程状态。
 let svc = null;
 let seq = 0;
-const pending = new Map();
+
+function retireService(handle) {
+  if (svc === handle) svc = null;
+  try { handle.proc.kill(); } catch { /* already dead */ }
+}
 
 function ensureService() {
   if (svc) return svc;
-  svc = spawn(PY, [SERVER], {
+  const handle = { proc: null, pending: new Map(), rl: null };
+  const proc = spawn(PY, [SERVER], {
     cwd: REPO,
     stdio: ["pipe", "pipe", "inherit"],
   });
-  const rl = createInterface({ input: svc.stdout });
+  handle.proc = proc;
+  svc = handle;
+  const rl = createInterface({ input: proc.stdout });
+  handle.rl = rl;
   rl.on("line", (line) => {
     let msg;
     try {
@@ -143,51 +231,51 @@ function ensureService() {
     } catch {
       return;
     }
-    const waiter = pending.get(msg.id);
+    const waiter = handle.pending.get(msg.id);
     if (waiter) {
-      pending.delete(msg.id);
+      handle.pending.delete(msg.id);
       waiter(msg);
     }
   });
-  svc.on("exit", () => {
-    for (const waiter of pending.values()) waiter({ error: "pii server exited" });
-    pending.clear();
-    svc = null;
-  });
+  const die = (error) => {
+    // 只拒绝本实例的在途等待者，不碰其他实例（新进程）的 pending
+    for (const waiter of handle.pending.values()) waiter({ error });
+    handle.pending.clear();
+    // 只有 svc 仍指向本实例时才清空，避免误杀健康的新进程
+    if (svc === handle) svc = null;
+  };
+  proc.on("exit", () => die("pii server exited"));
   // spawn 失败（如 PATH 里没有 python）必须兜住: 否则 Node 的未处理 error 事件会终止宿主进程
-  svc.on("error", (err) => {
-    for (const waiter of pending.values()) {
-      waiter({ error: `pii server spawn failed: ${err?.code ?? err?.message ?? err}` });
-    }
-    pending.clear();
-    svc = null;
-  });
-  return svc;
+  proc.on("error", (err) => die(`pii server spawn failed: ${err?.code ?? err?.message ?? err}`));
+  return handle;
 }
 
-function callServer(payload, pick, project) {
-  const p = ensureService();
-  if (!p) return Promise.reject(new Error("pii server unavailable"));
+function callServerOn(handle, payload, pick, project) {
+  if (!handle) return Promise.reject(new Error("pii server unavailable"));
   const id = "g" + (++seq);
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      pending.delete(id);
+      handle.pending.delete(id);
       reject(new Error("pii server timeout"));
     }, CALL_TIMEOUT_MS);
-    pending.set(id, (msg) => {
+    handle.pending.set(id, (msg) => {
       clearTimeout(timer);
       if (msg.error) reject(new Error(msg.error));
       else if (typeof pick(msg) !== "string") reject(new Error("pii server bad response"));
       else resolve(project ? project(msg) : pick(msg));
     });
     try {
-      p.stdin.write(JSON.stringify({ ...payload, id, sid: SID }) + "\n");
+      handle.proc.stdin.write(JSON.stringify({ ...payload, id, sid: SID }) + "\n");
     } catch (err) {
-      pending.delete(id);
+      handle.pending.delete(id);
       clearTimeout(timer);
       reject(err);
     }
   });
+}
+
+function callServer(payload, pick, project) {
+  return callServerOn(ensureService(), payload, pick, project);
 }
 
 // 一次 IPC：脱敏（含增量 map，供显示侧还原）+ 还原（写入侧用）。
@@ -195,13 +283,45 @@ function callServer(payload, pick, project) {
 // 显示侧的 mask 由 Node 侧 PII_GUARD_DISPLAY 控制，不能让服务端改这份映射的值。
 // deps.redact 注入的 mock 只用于 post-execute；写入侧一律走真实 restore IPC。
 function redact(text) {
-  return callServer({ text, mode: "full" }, (msg) => msg.redacted, (msg) => msg);
+  return callServerWithRetry({ text, mode: "full" }, (msg) => msg.redacted, (msg) => msg);
 }
 
 // 写入侧：把占位符还原回原文（server.py 的 op=restore, mode=full）。
 // 原文只在宿主 Node 进程内停留一瞬并直接传给原工具实现，不进模型上下文、不回显。
 function restoreText(text) {
-  return callServer({ op: "restore", text, mode: "full" }, (msg) => msg.restored);
+  return callServerWithRetry({ op: "restore", text, mode: "full" }, (msg) => msg.restored);
+}
+
+// 服务瞬断（首次 spawn、解释器冷启动、上一次进程刚退出）不应立刻阻断工具结果:
+// 重试几次再判定为真故障。只对「可恢复」错误重试——坏响应/非法参数属于确定性失败，
+// 重试只会拖慢且必然再失败，直接抛出交给 fail-closed 处理。
+const CALL_MAX_ATTEMPTS = 3;
+const CALL_RETRY_BASE_MS = 150;
+const RECOVERABLE = /unavailable|spawn failed|exited|timeout/i;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function callServerWithRetry(payload, pick, project) {
+  let lastErr = null;
+  let failedHandle = null;
+  for (let attempt = 1; attempt <= CALL_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const handle = ensureService();
+      failedHandle = handle;
+      return await callServerOn(handle, payload, pick, project);
+    } catch (err) {
+      lastErr = err;
+      const recoverable = RECOVERABLE.test(String(err?.message ?? err));
+      if (!recoverable || attempt === CALL_MAX_ATTEMPTS) break;
+      // 仅淘汰「本次尝试所用」的实例: 按引用清 svc 并 kill 旧进程。
+      // 不用无条件 svc=null，避免并发重试时把别的重试刚建立的新进程清掉。
+      if (failedHandle) retireService(failedHandle);
+      await sleep(CALL_RETRY_BASE_MS * attempt);
+    }
+  }
+  throw lastErr ?? new Error("pii server unavailable");
 }
 
 // 递归还原参数对象里的文本内容；返回 { args, changed, failed }。
@@ -270,10 +390,6 @@ function redactValueLeaves(value, pairs) {
 const phMap = new Map(); // 占位符 → 显示值
 const displayBufs = new Map(); // agent.session.id → { pending: 扣住的尾部前缀 }
 
-function displayMode() {
-  return DISPLAY_MODE;
-}
-
 // 替换累计文本中的完整占位符; 返回 (可显示文本, 扣住的尾部前缀)
 function splitDisplayable(acc) {
   const m = PH_TAIL.exec(acc);
@@ -283,13 +399,33 @@ function splitDisplayable(acc) {
   return { shown, hold };
 }
 
+// 进程重启后 phMap 为空，但映射仍保存在 SQLite。assistant-stream 是同步事件，
+// 无法 await IPC，因此采用「先透传占位符 → 异步 restore → 回填 phMap → 下一帧用缓存」策略。
+// 同一占位符只触发一次 IPC；pendingRestores 防止并发重复请求。
+// restoreImpl 由 apply() 注入（deps.restore ?? restoreText），支持测试 mock。
+const pendingRestores = new Set();
+let restoreImpl = restoreText; // 默认值，apply() 中被 deps.restore 覆盖
+function scheduleRestore(ph) {
+  if (pendingRestores.has(ph)) return;
+  pendingRestores.add(ph);
+  restoreImpl(ph).then((restored) => {
+    if (restored && restored !== ph) {
+      phMap.set(ph, displayMode() === "mask" ? displayValue(ph, restored) : restored);
+    }
+  }).catch(() => {
+    // restore 失败保持占位符透传，不阻塞流
+  }).finally(() => {
+    pendingRestores.delete(ph);
+  });
+}
+
 // 显示侧映射值与 value 重渲染需要的是两份不同的东西：
 //   - value 重渲染：占位符 → 原文（把 canonical value 里的原文换成占位符）
 //   - 显示侧 phMap：占位符 → 显示值（mask 模式是打码串，绝不能是原文）
 // 因此 redact 请求恒为 mode=full（服务端下发原文），mask 在 Node 侧按
 // server.py:_mask_value 同口径复刻，保证 PII_GUARD_DISPLAY=mask 语义不变。
 function displayValue(ph, orig) {
-  if (DISPLAY_MODE !== "mask") return orig;
+  if (displayMode() !== "mask") return orig;
   const etype = ph.replace(/^⟦PII:/, "").replace(/:\d+⟧$/, "");
   if (etype === "EMAIL_ADDRESS" && orig.includes("@")) {
     const at = orig.indexOf("@");
@@ -339,10 +475,17 @@ function auditShellBypass(exec, reason) {
   }
 }
 
+// 命令字符串上限：allowlist 正则在 post-execute 里同步运行，超长输入会放大回溯风险。
+// 真实命令极少超过 4KB；超限一律按“不在白名单”处理，走正常脱敏。
+const ALLOWLIST_MAX_CMD = 4096;
+
 function shellBypassReason(exec) {
-  if (SHELL_DISABLED) return "env";
+  if (isShellDisabled()) return "env";
+  const allowlist = getAllowlist();
   const cmd = exec?.args?.command;
-  if (SHELL_ALLOWLIST && typeof cmd === "string" && SHELL_ALLOWLIST.test(cmd)) return "allowlist";
+  if (allowlist && typeof cmd === "string" && cmd.length <= ALLOWLIST_MAX_CMD && allowlist.test(cmd)) {
+    return "allowlist";
+  }
   return null;
 }
 
@@ -350,6 +493,7 @@ function shellBypassReason(exec) {
 export async function apply(ctx, deps = {}) {
   const redactFn = deps.redact ?? redact;
   const restoreFn = deps.restore ?? restoreText;
+  restoreImpl = restoreFn; // 注入到 scheduleRestore
   // prepend: 最外层，先于其它 post-execute 监听器取到最终 content，兜住它们的改写
   ctx.on(
     "tools/post-execute",
@@ -471,8 +615,8 @@ export async function apply(ctx, deps = {}) {
       } catch (err) {
         // fail-closed: 服务异常时阻断结果，绝不放行明文。
         console.error(`[pii-guard] redact failed, blocking result: ${err?.message ?? err}`);
-        if (FAIL_OPEN) {
-          console.error("[pii-guard] PII_GUARD_FAIL_OPEN=1 → passthrough (TROUBLESHOOTING ONLY)");
+        if (isFailOpen()) {
+          console.error("[pii-guard] failOpen=true → passthrough (TROUBLESHOOTING ONLY)");
           return decision;
         }
         return {
@@ -551,11 +695,13 @@ export async function apply(ctx, deps = {}) {
   // 显示侧还原（方案 B）: 助手流经 GUI 前, 同步替换占位符为映射值（full=原值 / mask=打码）。
   // 持久化在 live.push() 内部完成（早于本事件），此处改写只影响显示流与重连基线，
   // 不改会话存储、不进模型上下文。prepend 保证先于 session-controller 折叠器执行。
-  if (DISPLAY_MODE !== "off") {
+  {
+    // 始终注册；off 模式在事件内动态判断并原样透传，便于设置页即时开关（不重启）。
     ctx.on(
       "agent/assistant-stream",
       ({ agent, frame }) => {
         try {
+          if (displayMode() === "off") return;
           if (frame.type === "start") {
             const b = displayBufs.get(agent?.session?.id);
             if (b) b.pending = ""; // 新流开始: 清掉上一流的扣尾
@@ -582,6 +728,11 @@ export async function apply(ctx, deps = {}) {
           const b = displayBufs.get(agent?.session?.id) ?? { pending: "" };
           displayBufs.set(agent?.session?.id, b);
           const acc = b.pending + frame.chunk.text;
+          // 对 phMap 中没有的占位符触发异步 restore（重启恢复场景）
+          acc.replace(PH_FULL, (ph) => {
+            if (!phMap.has(ph)) scheduleRestore(ph);
+            return ph;
+          });
           const { shown, hold } = splitDisplayable(acc);
           b.pending = hold;
           frame.chunk = { ...frame.chunk, text: shown };
