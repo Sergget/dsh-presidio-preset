@@ -41,6 +41,12 @@ Python/Node 双端 parity 是硬约束。
       Cordis 实际生效定义核对通过（`tools/verify_preset_plugins.mjs` PASS）。
 - [x] 1.5 字段探针、五套 JS 回归、全量 pytest、install/verify 全部执行（见证据）。
 - [x] 1.6 实施报告与证据落盘：docs/PHASE1-REPORT.md。
+- [x] 1.7（追加，2026-11-20 生产接线事故）真实启动暴露 4 项组合缺陷并修复：
+      hooks 合并内置规则库（rule_libraries/*.json + 用户词表）、Python
+      `_known_entity_types` 并入 `_PRIO`、双端 analyze 拆 raw/probe 两桶（wants_raw
+      原文坐标不再被 `norm.back()` 平移）、guard 加载期静默解析。新增门禁 #14
+      （双端 hooks 生产路径）与 `tests/node/preset-runtime-types.mjs`。详见
+      [INCIDENT-20261120-runtime-wiring.md](INCIDENT-20261120-runtime-wiring.md)。
 
 ## 最终证据
 
@@ -61,6 +67,10 @@ Python/Node 双端 parity 是硬约束。
 | 门禁第 1 项反证 | 伪造 `NONEXISTENT_TYPE` / 新增无探针类型 | 两种都 FAIL（缺口不会被放过） |
 | 预设插件解析 | `node tools/verify_preset_plugins.mjs` | PASS（home 18 / bundle 18） |
 | 安装自检 | `pwsh tools/verify_install.ps1` | PASS=4 FAIL=0 SKIP=1，exit 0 |
+| 生产接线（Node） | `node tests/node/preset-runtime-types.mjs` | PRESET_RUNTIME_TYPES_PASS 8 项 |
+| 生产接线（Python） | `python tools/check_runtime_types.py` | ok=true, declared=20, missing=[] |
+| 门禁第 14 项 | `python tools/release_gate.py --only 14` | PASS（node=ok py=ok） |
+| 全量 pytest（事故修复后） | `python -m pytest tests/ -q` | 281 passed, 8 subtests passed |
 
 ## 已知边界（如实披露，非缺陷逃避）
 

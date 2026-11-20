@@ -25,6 +25,8 @@
 | 10 | 源码可溯源（origin 含 HEAD / 产物清单） | PASS（A：origin 已含 HEAD，2026-11-10 推送） |
 | 11 | 仓库不落真实 PII / 映射库 | PASS |
 | 12 | 外部语料（网络下载）回归 | PASS（离线时 SKIP） |
+| 13 | Phase1 最小工具面（门禁①②③） | PASS（四件套挂载、shell/直读面移除；GATE_PHASE1_DONE） |
+| 14 | 生产配置实体类型接线（双端 hooks） | PASS（2026-11-20 新增；事故后补门禁，只走生产路径，不再用测试内显式传规则的自证口径） |
 
 > **本轮修复（2026-11-16，人名泄漏 + meta.lines 原文）**：会话 `session-18565589-7045-4c0a-aedd-852209df044d` 暴露两条独立缺陷并已修复。
 > (A) 新版 `read` 的 `tool/result.meta.lines` 直接派生自 canonical `value.lines`（48 行原文），而 `tools/post-execute` 只改 `content` 碰不到 `meta` → 模型看到占位符，但 session log 与 GUI 卡片仍留明文。修法：插件用 `redactValueLeaves()` 递归把 `result.value` 的原文替换成占位符，返回公开的 `{kind:"accept", value}` 决策；`pipeline.js createSuccessResult()` 用新 value 重跑 `render` + `presentationMeta`，content / meta.lines / meta.path 一起脱敏。仅当检测到 PII 且工具带 `meta` 时走此路径（无 PII 零 schema 风险），shell+job 保持原 content 路径以保留截断/非文本标记；`redact()` 恒发 `mode:"full"` 拿原文映射，`PII_GUARD_DISPLAY=mask` 时显示侧打码由 Node 侧 `displayValue()` 复刻。
@@ -38,6 +40,8 @@
 
 ：`python tools/release_gate.py --json $env:TEMP\pii_verify_leak\pii_gate_full_leak.json` → **PASS 11 / FAIL 1 / SKIP 0 / MANUAL 0（677.1s，退出码 1）**，证据：`$env:TEMP\pii_verify_leak\verify2_result.json` 与 `pii_gate_full_leak.json`。#1/#2/#3/#4/#5/#7/#8/#9/#10/#11/#12 全 PASS；#5 `src=repo plugin=ok; installed_sync=ok; js_smoke=pass/display=pass`、#8 **213 passed in 45.94s**、#9 wheel 两次构建一致（`3ce8d89dbdf81293…`，61357B，`reproducible=True`）、#10 `HEAD=db7c77a6 origin/master=db7c77a6 ahead=0`（`commit_match=False tree_digest_match=False`，按「origin 可达」路径 A PASS）。**唯一 FAIL 是 #6 依赖漏洞**：环境 `opentelemetry-api 1.45.1` 报 `CVE-2026-126360`（fix 1.45.2），属本机已安装包的上游 advisory，与本轮 PII 代码/依赖声明无关（11-11 复核时 pip-audit 为 0）；升级 `opentelemetry-api>=1.45.2` 后重跑 #6 即可恢复 12/12，本次不擅自改动依赖。`tests/js/plugin_jobs.mjs` 现 24 条、`plugin_display.mjs` 6 条，均由 #5 调用。
 > 另记：本轮验证全程在 `pwsh` 工具的 Windows Job runner 故障（`0xC0000142`）下通过 Playwright server 的 `windowsHide:true` 子进程通道完成；`pwsh`/`glob`/`grep` 工具本身不可用，不影响产物结论。
+
+> **门禁 #14 新增（2026-11-20，生产接线事故闭环）**：真实启动暴露 golden/门禁全绿但生产失效的组合缺陷——①hooks 只加载 preset 用户词表，`rule_libraries/extended-fields.json` 从未进生产链路（测试里显式传规则=自证）；②Python `_known_entity_types` 漏 `_PRIO` 键（MAC_ADDRESS 被判未知剔除）；③双端 `analyze()` 把 wants_raw 原文坐标结果混入归一化桶过 `norm.back()`，跨度整体平移一字（双端同错所以 57/57 golden 测不出）；④guard 模块加载期 `resolveRepo(null)` 误报「无法确定仓库根」。修法：双端 hooks 合并内置库+用户规则（分号多路径，逐文件热更新）；`engine.py` 并入 `set(_PRIO)`；analyze 拆 raw/probe 两桶只映射后者；加载期静默解析。防回归：`tests/node/preset-runtime-types.mjs`（8 项，只走 PII_DSH_PRESET→getEngine 生产路径）+ `tools/check_runtime_types.py`（Python 同口径）+ `check_runtime_wiring()` 作为第 14 项门禁；`--only 14` PASS（node=ok py=ok declared=20 missing=[] unproduced=[] unknown_warning=False）。全量回归：pytest 281 passed、golden 57/57、五套 JS 全绿。详见 [INCIDENT-20261120-runtime-wiring.md](INCIDENT-20261120-runtime-wiring.md)。
 
 > **复核结论（2026-11-16 晚，用户自定义屏蔽词 UI 落地后全量门禁）**：`python tools/release_gate.py --json C:/Users/sergg/AppData/Local/Temp/pii_gate_run2/gate.json` → **PASS 11 / FAIL 1 / SKIP 0 / MANUAL 0（157.1s）**。#1/#2/#3/#4/#5/#7/#8/#9/#10/#11/#12 全 PASS；#5 新增 `terms=ok; terms_wiring=ok(.pii_presidio_store/user_terms_rules.json)`；#8 **222 passed in 13.53s**；#9 wheel 两次构建仍字节一致（`3ce8d89dbdf81293…`，61357B，`reproducible=True`）。**唯一 FAIL 仍是 #6 依赖漏洞**，且仍是环境级 `opentelemetry-api 1.45.1` → `CVE-2026-126360`（fix 1.45.2），与本轮改动无关；本轮未升级该全局包。另：本轮 `pwsh`/`glob`/`grep` 工具持续故障（`Windows Job runner exited with exit code 3221225794` / `ripgrep provider failure`），全部验证经 Playwright server 的 `windowsHide:true` 子进程通道完成。
 
