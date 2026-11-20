@@ -75,7 +75,7 @@ function resolveValidator() {
   return null;
 }
 
-function loadJsonRules(path, strict = false) {
+export function loadJsonRules(path, strict = false) {
   const rules = [];
   const errors = [];
   let data;
@@ -150,8 +150,9 @@ function loadCustomRules(value, strict = false) {
 export class CustomRuleSet {
   constructor(opts = {}) {
     this.opts = opts;
+    this.opts = opts;
     this._static = Array.isArray(opts.rules);
-    this.sources = opts.sources ?? (this._static ? null : (process.env[CUSTOM_ENV] || null));
+    this.sources = opts.sources ?? opts.paths ?? (this._static ? null : (process.env[CUSTOM_ENV] || null));
     this.strict = opts.strict ?? false;
     this.checkInterval = Math.max(0, Number(opts.checkInterval ?? 1.0));
     this._lastCheck = 0;

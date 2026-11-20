@@ -403,7 +403,15 @@ function makePersonRecognizer() {
           if (length === 3 && probe.length === 3 && PERSON_STOPWORDS.has(probe.slice(0, 2))) continue;
           const end = i + name.length;
           if (covered.has(`${i},${end}`)) break;
-          if (!leftContextOk(text, i)) continue;
+          if (!leftContextOk(text, i)) {
+            const left = text.slice(Math.max(0, i - 2), i);
+            const weakRoleOk = ["员工", "职员", "同事", "客户", "联系人"].includes(left)
+              && length === 3 && end < n && !isCjk(text[end])
+              && ![...probe.slice(1)].some((c) => NON_NAME_CHARS.has(c))
+              && !PERSON_STOPWORDS.has(probe)
+              && !(probe.length === 3 && PERSON_STOPWORDS.has(probe.slice(0, 2)));
+            if (!weakRoleOk) continue;
+          }
           if (bounds !== null) {
             // 无 jieba 时不会进入
             if (!bounds.has(i) || !bounds.has(end)) {
@@ -486,7 +494,8 @@ function makeRosterPersonRecognizer() {
 const LOC_CONT_CHARS = new Set("级域民场长区县市省镇乡村划界内外部门");
 const LOC_BLACKLIST_SUFFIX = ["城市", "都市", "城区", "郊区", "市区", "社区", "园区",
   "区域", "辖区", "小区", "地区", "城区", "县区", "省市"];
-const RE_ADDR = /[一-龥]{1,12}(?:路|街|大道|巷|弄|胡同)(?:[东西南北中][段路街])?\d+号(?:[0-9]+(?:栋|单元|室|楼))?/g;
+const RE_ADDR = /[一-龥]{1,12}(?:路|街|大道|巷|弄|胡同)(?:[东西南北中][段路街])?\d+号(?:(?:[0-9]+(?:栋|单元|楼))*[0-9]+(?:室|号)?|[0-9]+(?:栋|单元|室|楼))?/g;
+const RE_NATIVE_PLACE = /(?:籍贯|户籍地|户籍所在地)\s*[：:]?\s*(北京|上海|天津|重庆|河北|山西|辽宁|吉林|黑龙江|江苏|浙江|安徽|福建|江西|山东|河南|湖北|湖南|广东|海南|四川|贵州|云南|陕西|甘肃|青海|台湾|内蒙古|广西|西藏|宁夏|新疆|香港|澳门)([一-龥]{2,4}?)(?=市|[，。；,;！？!?、\s]|$)/g;
 const LOC_BLACKLIST = new Set(["开发区", "高新区", "经开区", "示范区", "试验区", "工业区",
   "商业区", "住宅区", "风景区", "旅游区", "保税区", "城镇",
   "乡镇", "城区", "郊区", "市区", "社区", "园区", "区域",
@@ -514,6 +523,12 @@ function makeLocationRecognizer(assets) {
       // 街道门牌地址
       for (const m of text.matchAll(RE_ADDR)) {
         out.push(new RecognizerResult(m.index, m.index + m[0].length, "LOCATION", 0.85,
+          "ChineseLocationRecognizer"));
+      }
+      // 籍贯: 标签边界内省+市整体输出
+      for (const m of text.matchAll(RE_NATIVE_PLACE)) {
+        const start = m.index + m[0].indexOf(m[1]);
+        out.push(new RecognizerResult(start, start + m[1].length + m[2].length, "LOCATION", 0.86,
           "ChineseLocationRecognizer"));
       }
       // bounds 非 null 的 jieba ns 分支不会执行（固定无 jieba）
@@ -566,6 +581,7 @@ const ORG_GENERIC_NAMES = new Set([
 ]);
 const ORG_BODY_TAIL_VERB = new Set("速快代承");
 const ORG_PREFIX_WORDS = ["国家", "中国", "中华", "国务院", "中央", "全国"];
+const ORG_LEADING_PRONOUNS = ["他", "她", "它", "我", "你", "您", "咱", "某"];
 
 function nextOk(text, end) {
   return end >= text.length || (!isCjk(text[end]) || ORG_RIGHT_OK.has(text[end]));
@@ -582,6 +598,11 @@ function trimOrgStart(body, start, end, tokens) {
   for (const word of ORG_PREFIX_WORDS) {
     const idx = body.indexOf(word);
     if (idx > 0 && body.length - idx >= 4) return start + idx;
+  }
+  // F-06: "他是公司" 这类代词+名词不属于机构主体；仅保留至少2字主体。
+  for (const word of ORG_LEADING_PRONOUNS) {
+    const idx = body.indexOf(word);
+    if (idx === 0 && body.length - idx >= 2) return start + idx + word.length;
   }
   return start;
 }

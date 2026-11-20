@@ -390,6 +390,8 @@ const PRESET_DEFAULT_ENTITY_TYPES = [
   'ID_NUMBER', 'PHONE_NUMBER', 'EMAIL_ADDRESS', 'CREDIT_CODE', 'BANK_CARD',
   'PASSPORT', 'LICENSE_PLATE', 'IP_ADDRESS', 'MAC_ADDRESS', 'PERSON',
   'LOCATION', 'ORGANIZATION', 'JOB_TITLE',
+  // Phase 0 extended fields (7 new types from rule_libraries/extended-fields.json)
+  'AGE', 'BIRTH_DATE', 'GENDER', 'ETHNICITY', 'EDUCATION', 'IM_ACCOUNT', 'EMPLOYEE_ID',
 ];
 
 function readPreset(presetFile) {

@@ -562,7 +562,15 @@ class ChinesePersonRecognizer(LightRecognizer):
                 if (i, end) in covered:
                     break
                 if not _left_context_ok(text, i):
-                    continue
+                    # F-04: "员工范志强，..." 的职务词标签边界可提升为强上下文。
+                    # 仅当姓名内部条件通过且右边界明确时才放宽左边界。
+                    left = text[max(0, i - 2):i]
+                    if not (left in {"员工", "职员", "同事", "客户", "联系人"}
+                            and length == 3 and end < n and not _is_cjk(text[end])
+                            and not any(ch in _NON_NAME_CHARS for ch in probe[1:])
+                            and probe not in _PERSON_STOPWORDS
+                            and not (len(probe) == 3 and probe[:2] in _PERSON_STOPWORDS)):
+                        continue
                 if bounds is not None:
                     if i not in bounds or end not in bounds:
                         # 分词器可能把 "法定代表人马晓东" 切成 "人马/晓东",
@@ -673,7 +681,15 @@ _LOC_BLACKLIST_SUFFIX = ("城市", "都市", "城区", "郊区", "市区", "社�
 # 街道门牌: "黄山路600号" / "天府大道北段1700号" / "人民路12号"
 _RE_ADDR = re.compile(
     r"[一-龥]{1,12}(?:路|街|大道|巷|弄|胡同)(?:[东西南北中][段路街])?\d+号"
-    r"(?:[0-9]+(?:栋|单元|室|楼))?")
+    r"(?:(?:[0-9]+(?:栋|单元|楼))*[0-9]+(?:室|号)?|[0-9]+(?:栋|单元|室|楼))?")
+
+# 籍贯/户籍地：省级简称 + 不带“市”的城市名（如“山东济南”）
+_RE_NATIVE_PLACE = re.compile(
+    r"(?:籍贯|户籍地|户籍所在地)\s*[：:]?\s*"
+    r"(北京|上海|天津|重庆|河北|山西|辽宁|吉林|黑龙江|江苏|浙江|安徽|福建|江西|山东|"
+    r"河南|湖北|湖南|广东|海南|四川|贵州|云南|陕西|甘肃|青海|台湾|内蒙古|广西|西藏|"
+    r"宁夏|新疆|香港|澳门)([一-龥]{2,4}?)(?=市|[，。；,;！？!?、\s]|$)"
+)
 
 _LOC_BLACKLIST = {"开发区", "高新区", "经开区", "示范区", "试验区", "工业区",
                   "商业区", "住宅区", "风景区", "旅游区", "保税区", "城镇",
@@ -714,6 +730,9 @@ class ChineseLocationRecognizer(LightRecognizer):
         # 街道门牌地址: 与分词无关, 直接按模式识别
         for m in _RE_ADDR.finditer(text):
             out.append(RecognizerResult(m.start(), m.end(), self.entity_type, 0.85))
+        # 籍贯: 标签边界内省+市整体输出
+        for m in _RE_NATIVE_PLACE.finditer(text):
+            out.append(RecognizerResult(m.start(1), m.end(2), self.entity_type, 0.86))
 
         if bounds is not None:
             # 分词模式: 只认词性为 ns (地名) 的词, 泛称 "全省/项目在" 不会再被拼进地名
@@ -800,6 +819,7 @@ _ORG_GENERIC_NAMES = {
 _ORG_BODY_TAIL_VERB = set("速快代承")
 # 机构名前缀词: 命中时从该词起算, 剥掉前面的动词短语 ("项目由国家数据局" -> "国家数据局")
 _ORG_PREFIX_WORDS = ("国家", "中国", "中华", "国务院", "中央", "全国")
+_ORG_LEADING_PRONOUNS = ("他", "她", "它", "我", "你", "您", "咱", "某")
 
 
 class ChineseOrganizationRecognizer(LightRecognizer):
@@ -878,6 +898,11 @@ def _trim_org_start(body: str, start: int, end: int, tokens) -> int:
         idx = body.find(word)
         if idx > 0 and len(body) - idx >= 4:
             return start + idx
+    # F-06: "他是公司" 这类代词+名词不属于机构主体；仅保留至少2字主体。
+    for word in _ORG_LEADING_PRONOUNS:
+        idx = body.find(word)
+        if idx == 0 and len(body) - idx >= 2:
+            return start + idx + len(word)
     return start
 
 

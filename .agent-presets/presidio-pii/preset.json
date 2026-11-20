@@ -35,6 +35,13 @@
     "PERSON",
     "LOCATION",
     "ORGANIZATION",
-    "JOB_TITLE"
+    "JOB_TITLE",
+    "AGE",
+    "BIRTH_DATE",
+    "GENDER",
+    "ETHNICITY",
+    "EDUCATION",
+    "IM_ACCOUNT",
+    "EMPLOYEE_ID"
   ]
 }
