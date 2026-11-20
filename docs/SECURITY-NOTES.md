@@ -4,7 +4,7 @@
 > 「这类能力天生带来的代价」说明书：每一项都写明风险来源、当前缓解、残余风险和适用
 > 前提，便于使用者按自己的威胁模型决定是否启用。
 >
-> 配套：[RELEASE-GATE.md](RELEASE-GATE.md)（发布判据）、[CODE-REVIEW-20261118.md](CODE-REVIEW-20261118.md)（原始审查条目）。
+> 配套：[RELEASE-GATE.md](RELEASE-GATE.md)（发布判据）、[archive/CODE-REVIEW-20261118.md](archive/CODE-REVIEW-20261118.md)（原始审查条目）、[NODE-ENGINE.md](NODE-ENGINE.md)（Node 引擎权威文档；guard 运行时已切换为 `node_pii/`，安全语义与 Python 版逐字对齐，含 icacls ACL 收紧 parity）。
 
 ---
 

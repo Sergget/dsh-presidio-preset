@@ -254,13 +254,93 @@ function readTerms(termsFile) {
   if (!Array.isArray(parsed)) return [];
   const seen = new Set();
   const out = [];
+  let unrecognized = 0;
   for (const row of parsed) {
     if (!row || typeof row !== 'object') continue;
     if (row.entity_type !== ENTITY_TYPE) continue;
+    if (row.name === PLACEHOLDER_NAME) continue; // never-matching sentinel, not a term
     const term = typeof row.term === 'string' ? row.term : '';
     if (!term || seen.has(term)) continue;
     seen.add(term);
     out.push(term);
+  }
+  // S3: rows written by hand may lack the custom `term` key. Unescape the
+  // `pattern` back to the literal term so a manual edit shows up in the list
+  // instead of being silently wiped by the next save. Only safe escapes the
+  // UI itself produces (escapeLiteral) are reversed; anything else counts as
+  // unrecognized and is reported, never auto-adopted.
+  for (const row of parsed) {
+    if (!row || typeof row !== 'object') continue;
+    if (row.entity_type !== ENTITY_TYPE) continue;
+    if (row.name === PLACEHOLDER_NAME) continue;
+    if (typeof row.term === 'string' && row.term) continue; // already handled above
+    const pattern = typeof row.pattern === 'string' ? row.pattern : '';
+    if (!pattern) continue;
+    const literal = unescapeLiteral(pattern);
+    if (literal === null || literal === '' || seen.has(literal)) {
+      unrecognized += 1;
+      continue;
+    }
+    seen.add(literal);
+    out.push(literal);
+  }
+  if (unrecognized > 0) {
+    console.error(`[dsh-pii-guard-terms] readTerms: ${unrecognized} USER_TERM rule(s) could not be mapped back to a literal term (real regex patterns). They are preserved verbatim on the next save but cannot be edited via the UI.`);
+  }
+  return out;
+}
+
+/**
+ * S3: rows that must survive a UI save untouched — USER_TERM rules with no
+ * usable `term` key whose pattern is not a UI-written literal (real regexes).
+ * writeTerms re-appends them verbatim so a hand-maintained rule is never lost.
+ */
+function unrecognizedRuleRows(termsFile) {
+  if (!existsSync(termsFile)) return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(termsFile, 'utf8'));
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const adopted = new Set(readTerms(termsFile));
+  const kept = [];
+  for (const row of parsed) {
+    if (!row || typeof row !== 'object') continue;
+    if (row.entity_type !== ENTITY_TYPE || row.name === PLACEHOLDER_NAME) continue;
+    if (typeof row.term === 'string' && row.term) continue;
+    const literal = typeof row.pattern === 'string' ? unescapeLiteral(row.pattern) : null;
+    if (literal !== null && literal !== '' && adopted.has(literal)) continue;
+    kept.push(row);
+  }
+  return kept;
+}
+
+/**
+ * S3: inverse of escapeLiteral for patterns the UI itself wrote. Returns null
+ * when the pattern contains anything beyond plain text + the exact escapes
+ * escapeLiteral emits (regex syntax, unknown escapes, quantifiers), so a
+ * hand-written real regex is never misread as a literal term.
+ */
+function unescapeLiteral(pattern) {
+  if (pattern.length === 0) return '';
+  let out = '';
+  for (let i = 0; i < pattern.length; i += 1) {
+    const ch = pattern[i];
+    if (ch === '\\') {
+      const next = pattern[i + 1];
+      // escapeLiteral only ever emits `\<x>` escapes for [.*+?^${}()|[\]\\]
+      if (next !== undefined && /^[.*+?^${}()|[\]\\]$/.test(next)) {
+        out += next;
+        i += 1;
+        continue;
+      }
+      return null; // \d, \b, \uXXXX... -> a real regex, not a literal
+    }
+    // Any bare regex metacharacter means this pattern is not a plain literal.
+    if (/[.*+?^${}()|[\]]/.test(ch)) return null;
+    out += ch;
   }
   return out;
 }
@@ -272,7 +352,7 @@ function readTerms(termsFile) {
  * rule loader keeps the previous rule set when a reload yields zero rules,
  * so an empty array would silently keep redacting the old terms.
  */
-function writeTerms(termsFile, terms) {
+function writeTerms(termsFile, terms, preserveRows) {
   const rules = terms.map((term, index) => ({
     name: `user-term-${String(index + 1).padStart(4, '0')}`,
     entity_type: ENTITY_TYPE,
@@ -281,8 +361,8 @@ function writeTerms(termsFile, terms) {
     priority: 0,
     term,
   }));
-  const payload = rules.length > 0
-    ? rules
+  const payload = (rules.length > 0 || (preserveRows?.length ?? 0) > 0)
+    ? [...rules, ...(preserveRows ?? [])]
     : [{
       name: PLACEHOLDER_NAME,
       entity_type: ENTITY_TYPE,
@@ -609,7 +689,9 @@ async function handleSave(req, res, termsFile, config) {
     return;
   }
   try {
-    const count = writeTerms(termsFile, terms);
+    // S3: hand-written USER_TERM rules without a usable `term` key survive a
+    // UI save verbatim instead of being wiped.
+    const count = writeTerms(termsFile, terms, unrecognizedRuleRows(termsFile));
     writeJson(res, 200, { ok: true, count, terms, file: termsFile });
   } catch (error) {
     writeJson(res, 500, {

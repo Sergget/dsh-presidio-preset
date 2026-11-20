@@ -1,5 +1,12 @@
 # code-review 改进项落地计划
 
+> **状态（2026-11-20）：全部实施完毕，本计划已收口归档。**
+> 逐条处置：S1/S2/S4/N1 已在此前迭代实施；S3/N2 于 2026-11-20 实施完毕
+> （readTerms 反解兜底 + 不可反解规则保留；makeReq 支持 remoteAddress 覆盖 +
+> 非 loopback 403 用例）。验证：`tests/js/plugin_terms.mjs` 75/75 PASS，
+> plugin_jobs/display、41/41 golden 等价性、3/3 协议 smoke 全绿。
+> 本文件保留作为历史决策记录，新增改进项请另开计划文件。
+
 > 来源：2026-11-16 对「用户自定义屏蔽词 UI」（`dsh-pii-guard-terms`）及此前人名泄漏修复的代码审查报告。
 > 结论：**可合并，0 blocker / 4 suggestion / 2 nit**。本报告把逐条建议排期、明确落点与验收标准，供后续迭代认领。
 > 核心链路已实测成立（词表写入 → 规则文件 → 1s 热更新 → 命中 `⟦PII:USER_TERM:0001⟧` → 还原无损），以下均为健壮性 / 可维护性增强，非阻塞发布。

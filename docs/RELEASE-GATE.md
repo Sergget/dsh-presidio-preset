@@ -5,6 +5,8 @@
 
 判定原则：宁可标 SKIP/MANUAL/BLOCKED/PENDING，不用"看起来能用"凑 PASS；任何靠降级依赖绕过的项一律记 FAIL。
 
+> **运行时口径更新（2026-11-20，Node 引擎迁移）**：guard 插件的脱敏服务已从 spawn Python `presidio_pii/server.py` 切换为 spawn Node `node_pii/server.mjs`（零 npm 依赖；等价性 41/41、协议 smoke 3/3，详见 [NODE-ENGINE.md](NODE-ENGINE.md)）。门禁判据本身不变——#1/#3/#5 等仍以「脱敏行为」为准；`presidio_pii/` Python 引擎保留作为等价性基准与 CLI Office 文档用途，`python -m pytest` 与 `python tools/release_gate.py` 照常运行。fail-closed 语义不变（spawn 失败/退出/超时 → 阻断）。
+
 ---
 
 ## 0. 总览

@@ -54,11 +54,11 @@ function makeContext() {
   return { ctx, routes, disposers };
 }
 
-function makeReq(method, headers, body) {
+function makeReq(method, headers, body, remoteAddress = '127.0.0.1') {
   const req = Readable.from(body === undefined ? [] : [Buffer.from(body, 'utf8')]);
   req.method = method;
   req.headers = headers;
-  req.socket = { remoteAddress: '127.0.0.1' };
+  req.socket = { remoteAddress };
   return req;
 }
 
@@ -83,9 +83,9 @@ function makeRes() {
   };
 }
 
-async function call(route, method, headers, body) {
+async function call(route, method, headers, body, remoteAddress) {
   const res = makeRes();
-  await route.handler(makeReq(method, headers, body), res);
+  await route.handler(makeReq(method, headers, body, remoteAddress), res);
   return res;
 }
 
@@ -147,6 +147,13 @@ try {
   const wrongMethod = await call(listRoute, 'POST', loopbackHeaders, '{}');
   check('list rejects POST with 405', wrongMethod.statusCode === 405, String(wrongMethod.statusCode));
 
+  // --- N2: a real non-loopback client must be rejected before any origin proof
+  const lanPeer = await call(listRoute, 'GET', loopbackHeaders, undefined, '192.168.1.50');
+  check('non-loopback request rejected (N2)', lanPeer.statusCode === 403, String(lanPeer.statusCode));
+  check('non-loopback rejection mentions loopback-only',
+    typeof lanPeer.json()?.error === 'string' && lanPeer.json().error.includes('loopback-only'),
+    JSON.stringify(lanPeer.json()));
+
   // --- gate: cross-site request without origin proof
   const crossSite = await call(listRoute, 'GET', {
     host: '127.0.0.1:3080',
@@ -169,6 +176,10 @@ try {
     cookie: 'foo=1',
   });
   check('forged arbitrary cookie rejected (S1)', forgedCookie.statusCode === 403, String(forgedCookie.statusCode));
+
+  // --- N2: loopback via ::1 with a valid session cookie is still accepted
+  const loopbackV6 = await call(listRoute, 'GET', cookieHeaders, undefined, '::1');
+  check('loopback ::1 with valid cookie accepted (N2)', loopbackV6.statusCode === 200, String(loopbackV6.statusCode));
 
   // --- save a term
   const save = await call(saveRoute, 'POST', loopbackHeaders, JSON.stringify({
@@ -293,6 +304,62 @@ try {
   check('forged cookie cannot save preset (S1)', presetForbidden.statusCode === 403, String(presetForbidden.statusCode));
   const presetWrongMethod = await call(presetGet, 'POST', loopbackHeaders, '{}');
   check('preset get rejects POST with 405', presetWrongMethod.statusCode === 405, String(presetWrongMethod.statusCode));
+
+  // --- S3: a hand-written USER_TERM rule without a `term` key must not be
+  // wiped by the next save; a literal pattern is re-adopted as a term and a
+  // real regex rule is preserved verbatim. Flow mirrors the real UI: GET the
+  // list (which now includes the re-adopted literal), then save it back.
+  writeFileSync(termsFile, JSON.stringify([
+    {
+      name: 'user-term-0001',
+      entity_type: 'USER_TERM',
+      pattern: '手工维护词',
+      score: 0.95,
+      priority: 0,
+    },
+    {
+      name: 'custom-regex',
+      entity_type: 'USER_TERM',
+      pattern: '工号\\d{6}',
+      score: 0.95,
+      priority: 0,
+    },
+  ], null, 2) + '\n', 'utf8');
+  const s3List = await call(listRoute, 'GET', loopbackHeaders);
+  check('S3: literal pattern without term key is re-adopted',
+    Array.isArray(s3List.json()?.terms) && s3List.json().terms.includes('手工维护词'),
+    JSON.stringify(s3List.json()?.terms));
+  check('S3: real regex pattern is not misread as a literal term',
+    Array.isArray(s3List.json()?.terms) && !s3List.json().terms.some((t) => /\\d/.test(t)),
+    JSON.stringify(s3List.json()?.terms));
+
+  // The UI would send back the listed terms (re-adopted literal included) plus
+  // any user additions.
+  const uiTerms = [...(s3List.json()?.terms ?? []), '新词'];
+  const s3Save = await call(saveRoute, 'POST', loopbackHeaders, JSON.stringify({ terms: uiTerms }));
+  check('S3: save returns 200 over hand-written rules', s3Save.statusCode === 200, String(s3Save.statusCode));
+  const s3Stored = JSON.parse(readFileSync(termsFile, 'utf8'));
+  check('S3: literal hand-written rule converted to term key',
+    s3Stored.some((r) => r?.term === '手工维护词' && r?.pattern === '手工维护词'),
+    JSON.stringify(s3Stored));
+  check('S3: real-regex hand-written rule preserved verbatim',
+    s3Stored.some((r) => r?.name === 'custom-regex' && r?.pattern === '工号\\d{6}'),
+    JSON.stringify(s3Stored));
+  check('S3: new term written alongside preserved rules',
+    s3Stored.some((r) => r?.term === '新词'),
+    JSON.stringify(s3Stored));
+
+  // A user who deliberately removes the re-adopted literal from the list must
+  // still be able to delete it — but the regex rule survives that save too.
+  const removalSave = await call(saveRoute, 'POST', loopbackHeaders, JSON.stringify({ terms: ['新词'] }));
+  check('S3: removal save returns 200', removalSave.statusCode === 200, String(removalSave.statusCode));
+  const removalStored = JSON.parse(readFileSync(termsFile, 'utf8'));
+  check('S3: removed literal term is deleted from the file',
+    !removalStored.some((r) => r?.term === '手工维护词'),
+    JSON.stringify(removalStored));
+  check('S3: regex rule still survives a removal save',
+    removalStored.some((r) => r?.name === 'custom-regex' && r?.pattern === '工号\\d{6}'),
+    JSON.stringify(removalStored));
 
   // --- disposal removes the routes
   for (const dispose of disposers) {

@@ -13,7 +13,7 @@
 > 附录 B 给出旧编号对照表，可直接跳回归档文档查细节。
 >
 > 相关：`docs/ROADMAP.md`（NER 分档）、`docs/DECISION-shell-redaction.md`（shell 脱敏决策）、
-> `docs/PLAN-code-review-followups.md`（S1–S4）、`agent.md` §3（识别器设计约定）。
+> `docs/archive/PLAN-code-review-followups.md`（S1–S4，已收口）、`agent.md` §3（识别器设计约定）。
 
 ---
 
@@ -700,7 +700,7 @@ ctx.on("tools/post-execute", async (exec, result, next) => {
 | R-18 | **代码规则 = 加载任意 Python** | 🎯 | `custom_rules.py:251` `spec.loader.exec_module(mod)` | 第三方规则库不得自动执行；必须显式确认 + 来源标注 |
 | R-19 | **用户正则无超时、无复杂度限制（ReDoS）** | 🧩 | 现状无任何 `timeout`；Cloudflare 2019-07-02 一条规则回溯导致全球 502 共 27 分钟 | 单条规则超时 + 长度上限 + 复杂度预检；超时**必须可观测**（Presidio 只 warning 是反面教材） |
 | R-20 | **allow/deny 语义不对称，用户预期会落空** | 🎯 | Presidio #2455 原文：「recognizers can only add results, not remove those of other recognizers」 | 用户「加一条排除规则消误报」在当前架构下**不可能**；要么用白名单（后置过滤），要么明说 |
-| R-21 | **整体覆盖写会吞用户手工规则** | 🪤 | `docs/PLAN-code-review-followups.md` S3：`readTerms()` 只认 `row.term` | 库化后写入改为「按 id 增量」，或保存前 diff 并提示 |
+| R-21 | **整体覆盖写会吞用户手工规则** | 🪤 | `docs/archive/PLAN-code-review-followups.md` S3：`readTerms()` 只认 `row.term`（2026-11-20 已修复：反解兜底 + 保留行） | 库化后写入改为「按 id 增量」，或保存前 diff 并提示 |
 | R-22 | **仓库内规则库与门禁 #11 判据错位** | 🧱 | `_FORBIDDEN_TRACKED`（`release_gate.py:704-706`）**只按路径**判定，扫 `git ls-files`（`:711-712`）与 `git status --porcelain`（`:713-715`），再断言 `.gitignore` 规则数 `>= 5`（`:716-719`） | 一份放在仓库内 `rule_libraries/` 的示例库若混入真名，**#11 照样 PASS**。要么扩扫内容，要么强制示例库走虚构语料并加断言 |
 | R-23 | **`replaces` 依赖 id 稳定，用户自造 id 会撞车** | 🪤 | manifest 里 `replaces`/`requires`/`excludes` 全按 `id` 引用（2.5） | 命名空间规则：内置带 `builtin.` 前缀，用户库禁用该前缀 |
 | R-45 | **自定义类型不在 `_PRIO` 里 → 等长冲突永远垫底** | 🎯 | `_PRIO` 只有 13 个内置类型（`engine.py:38-41`），`_PRIO.get("AGE", 99)` = 99 vs `_PRIO["PERSON"]` = 8 | `AGE`、`USER_TERM`、工号、微信号等所有自定义字段库，与内置类型等长重叠时**无条件输**，字段被别的类型吞掉 | manifest 允许声明 `priority`，或新增 `_PRIO` 兜底规则：自定义类型默认取「同区间内置类型的最大值 + 1」 |

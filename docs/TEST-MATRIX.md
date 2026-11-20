@@ -2,6 +2,11 @@
 
 记录当前覆盖边界、实测缺口，以及可扩展方向的价值/成本评估。
 
+> **Node 引擎测试面（2026-11-20 新增）**：guard 运行时引擎已切换为 `node_pii/`（详见 [NODE-ENGINE.md](NODE-ENGINE.md)），对应新增两层测试——
+> - `tests/node/engine-equivalence.mjs`：41 组 Python golden（强制无 jieba 生成，`tools/gen_equivalence_golden.py`）逐字比对 Node 输出（redacted/n/map/entity_counts/n_whitelisted），当前 **41/41 ALL_GOLDEN_MATCH**；
+> - `tests/node/protocol-smoke.mjs`：redact → restore(full) → restore(mask) 端到端协议 smoke（含 mask 不泄露断言），当前 **3/3 ALL_PROTOCOL_CHECKS_PASS**。
+> 本文其余章节描述的 Python 引擎测试面继续有效（Python 引擎保留为等价性基准）。
+
 ## 1. 现状
 
 | 维度 | 已覆盖 |

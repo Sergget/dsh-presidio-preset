@@ -12,6 +12,7 @@
 | 构建产物 | `dist/presidio_pii_dsh-0.1.0-py3-none-any.whl`，66,668 B；清单 `release/presidio-pii-dsh-0.1.0.json` 绑定 HEAD `a31dac6`（artifact-level 产物级溯源），哈希 `8C99677F…6BE6E` |
 | 可复现哈希 | 历史值：2026-11-10 `75050E22…0361A`（57,350 B）、`69021c9` `77154909…20CF8`（58,831 B）仅作对照；当前清单值为 `8C99677F…6BE6E`（66,668 B，HEAD `a31dac6`）；再次发布须按第 2 节重算 |
 | 一键门禁 | `python tools/release_gate.py`（`--json` 落盘逐项结果） |
+| Node 引擎 | ✅ `node_pii/` 8 模块已替代 guard 运行时 Python 依赖（spawn `NODE_BIN node_pii/server.mjs`）；等价性 41/41、协议 smoke 3/3，详见 [NODE-ENGINE.md](NODE-ENGINE.md)。`presidio_pii/` Python 引擎保留（等价性基准 + CLI Office 文档用途） |
 | 最近一次门禁 | **PASS 11 / FAIL 1 / SKIP 0 / MANUAL 0**（2026-11-16 晚，屏蔽词 UI 落地后全量；#8 222 passed，#9 wheel 两次一致 61,357 B；深夜 FP 修复后单测 228 passed）。唯一 FAIL 为 #6 环境级 `opentelemetry-api 1.45.1` / `CVE-2026-126360`（fix 1.45.2，与本轮代码无关）。当前 #10 按路径 B（产物级）判定，清单绑定 HEAD `a31dac6`；HEAD 未推送，正式发布前须推送（转 A）或重生成清单维持 B（见第 5 节） |
 
 ## 1. 发布前检查
@@ -152,8 +153,8 @@ python -m venv "$env:TEMP\pii_release"
 | 脱敏有效性 | 抽样当日 read 输出，检查是否出现明文手机号/身份证/银行卡（只记录条数，不复制明文） | 出现明文 → 立即回退（第 6 节） |
 | `hook_log.jsonl` | 新增行数、`n_replaced` 分布、`entities` 类型分布、JSON 解析失败行数（只含元数据，不含原文） | 本次观测：81 行中 16 行解析失败（清洗时已丢弃）；若失败行持续增长 → 并发写/截断问题，需排查 |
 | 日志落盘风险 | 日志已改为只存元数据（实体类型/数量、内容指纹、`conv_sha1`/`doc_sha1`）；原文仅在 `sessions.db` | 文件仍须留在 `.gitignore` 内、限制访问；轮转上限 10 MB（超限改名 `hook_log.jsonl.1`） |
-| 延迟 | 大文件 read 的耗时（引擎吞吐约 0.8 MB/s，64 KB 约 88 ms） | 明显变慢 → 检查 Python 服务是否重启/排队 |
-| 插件异常 | DSH 日志中的 `[pii-guard] redact failed, blocking result` 告警与工具结果被 `[pii-guard]` 阻断 | 出现即表示 Python 脱敏服务不可用（fail-closed 已生效，明文未放行）；查 `PII_GUARD_PY` / 服务进程后重启插件。**不要**为此设置 `PII_GUARD_FAIL_OPEN=1` 绕过 |
+| 延迟 | 大文件 read 的耗时（guard 现走 `node_pii/server.mjs`，吞吐见 [NODE-ENGINE.md](NODE-ENGINE.md)；性能特征与 Python 版同量级） | 明显变慢 → 检查 Node 服务是否重启/排队 |
+| 插件异常 | DSH 日志中的 `[pii-guard] redact failed, blocking result` 告警与工具结果被 `[pii-guard]` 阻断 | 出现即表示脱敏服务不可用（fail-closed 已生效，明文未放行）；查 `PII_GUARD_NODE` / `PII_GUARD_REPO` 与服务进程后重启插件。**不要**为此设置 `PII_GUARD_FAIL_OPEN=1` 绕过 |
 | 误伤反馈 | 表格对齐、路径被替换导致命令失败、JSON 仍可解析但值不可回填 | 按 [DECISION-shell-redaction.md](DECISION-shell-redaction.md) 第 4 节的处置口径记录 |
 | 磁盘增长 | `.pii_presidio_store/`（`sessions.db`、映射库、日志） | 设定清理策略 **待定** |
 
