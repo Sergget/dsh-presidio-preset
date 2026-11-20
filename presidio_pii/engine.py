@@ -71,10 +71,16 @@ class PresidioPIIEngine:
 
     @staticmethod
     def _known_entity_types(rule_set) -> set:
-        """当前合法实体类型全集 = 内置识别器类型 ∪ 自定义规则类型。"""
+        """当前合法实体类型全集 = 内置识别器类型 ∪ 优先级表 ∪ 自定义规则类型。
+
+        必须并入 _PRIO 的键: MAC_ADDRESS 这类由多类型识别器动态产出的实体
+        (IpMac 的 entity_type 只声明其中一个) 不会出现在识别器的静态属性里,
+        只算识别器类型会把它判为"未知"并从 preset 白名单里静默剔除。
+        Node 端 _knownEntityTypes() 一直是这个口径, 此处对齐。
+        """
         builtin = {getattr(rec, "entity_type", None) for rec in get_chinese_recognizers()}
         custom = {getattr(r, "entity_type", None) for r in rule_set.rules}
-        return {t for t in (builtin | custom) if t}
+        return {t for t in (builtin | custom | set(_PRIO)) if t}
 
     def _sanitize_entity_types(self, types) -> set:
         """过滤掉未知/拼错的实体类型名，避免误配置导致静默零脱敏。"""
@@ -176,10 +182,18 @@ class PresidioPIIEngine:
         norm = NormalizedText(text)
         probe = norm.text if norm.changed else text
         results: List[RecognizerResult] = []
+        raw_results: List[RecognizerResult] = []
         for rec in self.recognizers:
             # 自定义规则 (wants_raw) 按约定在原文上匹配并返回原文坐标;
             # 内置识别器在归一化文本上识别, 命中后映射回原文坐标
-            results.extend(rec.analyze(text if getattr(rec, "wants_raw", False) else probe))
+            if getattr(rec, "wants_raw", False):
+                raw_results.extend(rec.analyze(text))
+            else:
+                results.extend(rec.analyze(probe))
+        # 只有跑在归一化文本上的结果需要映射回原文坐标。wants_raw 的结果已经是
+        # 原文坐标, 再走一次 back() 会把跨度整体平移 —— 实测把"男"挪成"民"、把
+        # "1990-03-07" 吞掉后两个字符、把账号前两位留在明文里。双端 golden 逐字
+        # 一致却都错, 因为两端犯了同一个错。
         if norm.changed:
             mapped = []
             for r in results:
@@ -188,6 +202,7 @@ class PresidioPIIEngine:
                     continue
                 mapped.append(RecognizerResult(start, end, r.entity_type, r.score))
             results = mapped
+        results.extend(raw_results)
         # 去重 & 冲突处理 (使用含自定义优先级的表)
         results = self._trim_spans(text, results)
         results = self._drop_uuid_spans(text, results)

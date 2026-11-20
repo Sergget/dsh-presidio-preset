@@ -127,23 +127,33 @@ export class Engine {
     const norm = new NormalizedText(text);
     const probe = norm.changed ? (norm.text ?? norm.normalized) : text;
 
-    let results = [];
+    let rawHits = [];
+    let probeHits = [];
     for (const rec of this.recognizers) {
-      const target = (rec.wants_raw === true || rec.wantsRaw === true) ? text : probe;
+      const wantsRaw = rec.wants_raw === true || rec.wantsRaw === true;
+      const target = wantsRaw ? text : probe;
       let hits = [];
       if (typeof rec.analyze === 'function') hits = rec.analyze(target);
       else if (typeof rec.entities === 'function') hits = rec.entities(target);
-      for (const r of (hits || [])) results.push(r);
+      const bucket = wantsRaw ? rawHits : probeHits;
+      for (const r of (hits || [])) bucket.push(r);
     }
 
+    // 只有跑在归一化文本上的结果需要映射回原文坐标。wants_raw 的识别器（内置
+    // 自定义规则）本来就返回原文坐标，再走一次 back() 会把跨度整体平移——实测
+    // 把"男"挪成"民"、把"1990-03-07"吞掉后两个字符、把账号前两位留在明文里。
+    // 双端 golden 完全一致却都错，就是因为两边犯了同一个错。
+    let results = rawHits;
     if (norm.changed) {
       const mapped = [];
-      for (const r of results) {
+      for (const r of probeHits) {
         const [start, end] = norm.back(r.start, r.end);
         if (start < 0 || end > text.length || start >= end) continue;
         mapped.push(rr(start, end, r.entity_type, r.score));
       }
-      results = mapped;
+      results = rawHits.concat(mapped);
+    } else {
+      results = rawHits.concat(probeHits);
     }
 
     results = this._trimSpans(text, results);

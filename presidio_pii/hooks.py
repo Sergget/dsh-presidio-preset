@@ -97,9 +97,29 @@ def _whitelist_file(strict: bool = False) -> str | None:
             or _preset_path("whitelist_path", strict=strict))
 
 
+_BUILTIN_RULES_DIR = "rule_libraries"
+
+
+def _builtin_rule_libraries() -> list[str]:
+    """仓库内置规则库 (rule_libraries/*.json), 始终与用户规则一起加载。
+
+    生产事故回归: 此前只加载 preset 的 custom_rules_path, 扩展字段库 (AGE 等
+    7 类) 缺席 -> 引擎判为"未知实体类型"并静默剔除, 字段能力在生产环境失效。
+    """
+    d = _REPO_ROOT / _BUILTIN_RULES_DIR
+    if not d.is_dir():
+        return []
+    return [str(p) for p in sorted(d.glob("*.json"))]
+
+
 def _custom_rules_spec() -> str | None:
-    return (os.environ.get("PII_DSH_CUSTOM_RULES")
-            or _preset_path("custom_rules_path"))
+    """内置库 + 用户规则 (分号分隔; CustomRuleSet 逐文件做热更新签名)。"""
+    explicit = (os.environ.get("PII_DSH_CUSTOM_RULES")
+                or _preset_path("custom_rules_path"))
+    parts = _builtin_rule_libraries()
+    if explicit:
+        parts.append(explicit)
+    return ";".join(parts) if parts else None
 
 
 def _parse_interval(raw, default: float = 1.0) -> float:

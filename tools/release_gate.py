@@ -1000,6 +1000,46 @@ def check_phase1() -> dict:
     return {"status": PASS if ok else FAIL, "evidence": ev, "reason": reason}
 
 
+def check_runtime_wiring() -> dict:
+    """生产配置接线：preset 声明的实体类型必须在真实 hooks 路径下全部可用。
+
+    事故背景：Phase 0 的 7 类扩展字段在 golden 与旧门禁 #1 全绿的情况下，实际
+    启动时报「忽略未知实体类型」——测试里显式传了 custom_rules，生产用的是
+    preset + hooks，内置规则库从未被加载。旧门禁断言了一套生产不用的配置。
+
+    因此本检查不碰测试夹具，只走两端各自的 hooks 层：
+      * Node: tests/node/preset-runtime-types.mjs
+      * Python: tools/check_runtime_types.py
+    """
+    node_rc, node_out = run(["node", "tests/node/preset-runtime-types.mjs"],
+                            cwd=REPO, timeout=180)
+    node_ok = node_rc == 0 and "PRESET_RUNTIME_TYPES_PASS" in node_out
+
+    py_rc, py_out = run([sys.executable, "tools/check_runtime_types.py"],
+                        cwd=REPO, timeout=180)
+    payload = {}
+    for line in py_out.splitlines():
+        if line.startswith("RUNTIME_TYPES "):
+            try:
+                payload = json.loads(line[len("RUNTIME_TYPES "):])
+            except ValueError:
+                payload = {}
+    py_ok = py_rc == 0 and bool(payload.get("ok"))
+
+    ok = node_ok and py_ok
+    ev = (f"node={'ok' if node_ok else 'fail'} py={'ok' if py_ok else 'fail'} "
+          f"declared={payload.get('declared', '?')} "
+          f"missing={payload.get('missing', '?')} "
+          f"unproduced={payload.get('unproduced', '?')} "
+          f"unknown_warning={payload.get('unknown_warning', '?')}")
+    if ok:
+        reason = "两端 hooks 生产路径下 preset 声明的实体类型全部已知且可产出"
+    else:
+        reason = (f"接线断裂: node={tail(node_out, 1)} "
+                  f"py={payload.get('missing') or payload.get('unproduced') or payload.get('error') or tail(py_out, 1)}")
+    return {"status": PASS if ok else FAIL, "evidence": ev, "reason": reason}
+
+
 CHECKS = [
     ("1 读取侧拦截(引擎层)", check_read),
     ("2 DSH 进程内 E2E", check_e2e),
@@ -1014,6 +1054,7 @@ CHECKS = [
     ("11 仓库不落 PII", check_repo_pii),
     ("12 外部语料(网络下载)", check_external_corpus),
     ("13 Phase1 最小工具面(门禁①②③)", check_phase1),
+    ("14 生产配置实体类型接线(双端 hooks)", check_runtime_wiring),
 ]
 
 

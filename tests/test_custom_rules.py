@@ -320,8 +320,13 @@ class IntegrationTest(unittest.TestCase):
                 os.utime(rules, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
                 # 自动检查已关闭: 未显式重载前仍用旧规则
                 self.assertIn("TYPE_A", hooks.before_llm("编号 ID-1234", "conv-reload"))
-                self.assertEqual(hooks.reload_rules(), 1)
+                # 内置规则库 (rule_libraries/*.json) 始终参与加载, 所以 reload 返回的是
+                # "内置 + 用户" 的总条数, 不再是 1。这里关心的是用户规则确实被换掉,
+                # 条数用 >=1 校验, 新旧类型由上下两行断言。
+                self.assertGreaterEqual(hooks.reload_rules(), 1)
                 self.assertIn("TYPE_B", hooks.before_llm("编号 ID-1234", "conv-reload"))
+                # 内置库与用户规则并存: 扩展字段在只配了用户规则的环境下依然生效
+                self.assertIn("AGE", hooks.before_llm("年龄 45 周岁", "conv-reload"))
             finally:
                 hooks.reset_singleton()
                 for k, v in old.items():

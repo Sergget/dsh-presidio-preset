@@ -84,16 +84,22 @@ function inferRepoFromModule() {
   }
 }
 const DEFAULT_REPO = inferRepoFromModule();
-function resolveRepo(config) {
+// 静默解析：加载期还没有 bundle config，此时告警必然误报。
+function resolveRepoQuiet(config) {
   const fromConfig = typeof config?.repo === "string" ? config.repo.trim() : "";
   const fromEnv = typeof process.env.PII_GUARD_REPO === "string" ? process.env.PII_GUARD_REPO.trim() : "";
-  const resolved = (fromConfig || fromEnv || DEFAULT_REPO).replace(/\\/g, "/").replace(/\/+$/, "");
+  return (fromConfig || fromEnv || DEFAULT_REPO).replace(/\\/g, "/").replace(/\/+$/, "");
+}
+function resolveRepo(config) {
+  const resolved = resolveRepoQuiet(config);
   if (!resolved) {
     console.error("[pii-guard] 无法确定仓库根：请配置 bundle config.repo 或环境变量 PII_GUARD_REPO（默认推断失败，插件部署在 DSH_HOME 时无法自动定位仓库）。");
   }
   return resolved;
 }
-let REPO = resolveRepo(null);
+// 加载期用静默版本：部署态位于 DSH_HOME，DEFAULT_REPO 必然为空，等 apply() 拿到
+// bundle config.repo 后再定论（否则每次启动都刷一条假告警）。
+let REPO = resolveRepoQuiet(null);
 let SERVER = REPO + "/node_pii/server.mjs";
 let HOOK_LOG = REPO + "/.pii_presidio_store/hook_log.jsonl";
 const SID = "pii-guard-" + process.pid;

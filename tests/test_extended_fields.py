@@ -69,3 +69,49 @@ def test_organization_excludes_pronoun():
 
 def test_native_place_includes_city():
     assert ("LOCATION", "山东济南") in _entities("籍贯：山东济南")
+
+# ---- 生产配置回归: hooks 必须把内置规则库一起加载 ----
+# 事故: 只读 preset 的 custom_rules_path -> 扩展字段库缺席 -> 7 类字段静默失效。
+def test_hooks_custom_rules_spec_includes_builtin_library():
+    from presidio_pii import hooks
+    spec = hooks._custom_rules_spec()
+    assert spec, "规则来源不应为空"
+    parts = [p.strip() for p in spec.split(";") if p.strip()]
+    assert any(p.endswith("extended-fields.json") for p in parts), parts
+    assert any("rule_libraries" in p.replace("\\", "/") for p in parts), parts
+
+
+def test_hooks_engine_knows_all_preset_types(tmp_path, monkeypatch):
+    """用生产配置(preset)建引擎, 而不是测试里显式塞规则。"""
+    import json
+    from presidio_pii import hooks
+
+    repo = Path(__file__).resolve().parents[1]
+    preset = repo / ".agent-presets" / "presidio-pii" / "preset.json"
+    declared = json.loads(preset.read_text(encoding="utf-8-sig"))["entity_types"]
+
+    monkeypatch.setenv("PII_DSH_PRESET", str(preset))
+    monkeypatch.setenv("PII_DSH_DB_PATH", str(tmp_path / "sessions.db"))
+    monkeypatch.delenv("PII_DSH_CUSTOM_RULES", raising=False)
+    monkeypatch.delenv("PII_DSH_WHITELIST", raising=False)
+    hooks.reset_singleton()
+    try:
+        engine = hooks._get_engine()
+        known = engine._known_entity_types(engine._rule_set)
+        missing = [t for t in declared if t not in known]
+        assert not missing, f"未识别: {missing}"
+
+        sample = "\n".join([
+            "年龄 45 周岁，身体健康。",
+            "出生日期：1990-03-07。",
+            "性别：男，民族：汉族。",
+            "学历：硕士研究生。",
+            "微信：zhangsan2024 常联系。",
+            "工号：EMP-000123 请登记。",
+        ])
+        rd = engine.redact(sample, "runtime-test", "prompt")
+        for t in ("AGE", "BIRTH_DATE", "GENDER", "ETHNICITY", "EDUCATION",
+                  "IM_ACCOUNT", "EMPLOYEE_ID"):
+            assert t in rd.entity_counts, f"{t} 未命中: {rd.entity_counts}"
+    finally:
+        hooks.reset_singleton()

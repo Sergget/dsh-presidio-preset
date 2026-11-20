@@ -48,7 +48,32 @@ function presetPath(key, strict = false) {
 
 function dbPath() { return env('PII_DSH_DB_PATH') || presetPath('db_path') || DEFAULT_DB; }
 function whitelistFile(strict = false) { return env('PII_DSH_WHITELIST') || presetPath('whitelist_path', strict); }
-function customRulesSpec() { return env('PII_DSH_CUSTOM_RULES') || presetPath('custom_rules_path'); }
+const BUILTIN_RULES_DIR = 'rule_libraries';
+
+// 内置规则库：仓库 rule_libraries/*.json 始终与用户规则一起加载。
+// 生产事故回归：此前只加载 preset 的 custom_rules_path，扩展字段库（AGE 等 7 类）
+// 缺席 → 引擎判为"未知实体类型"并静默剔除，Phase 0 字段在生产环境等于没做。
+function builtinRuleLibraries(repoDir = DEFAULT_REPO) {
+  try {
+    const dir = path.join(repoDir, BUILTIN_RULES_DIR);
+    if (!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir)
+      .filter((f) => f.toLowerCase().endsWith('.json'))
+      .sort()
+      .map((f) => path.join(dir, f));
+  } catch (ex) {
+    warn(`内置规则库枚举失败，仅使用用户规则: ${ex.message}`);
+    return [];
+  }
+}
+
+// 返回分号分隔的多路径（CustomRuleSet 支持 [;,] 分隔并逐文件做热更新签名）
+function customRulesSpec() {
+  const explicit = env('PII_DSH_CUSTOM_RULES') || presetPath('custom_rules_path');
+  const parts = builtinRuleLibraries();
+  if (explicit) parts.push(explicit);
+  return parts.length ? parts.join(';') : null;
+}
 
 function parseInterval(raw, fallback = 1.0) {
   if (raw == null) return fallback;
