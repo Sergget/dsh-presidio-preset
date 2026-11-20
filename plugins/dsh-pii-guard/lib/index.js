@@ -25,7 +25,7 @@
 //   - shell 逃生开关（仅配置层，模型不可关，命中写审计 shell_bypass）:
 //       PII_GUARD_SHELL=off            整个进程不拦 shell/后台任务（启动时读取，重启生效）
 //       PII_GUARD_SHELL_ALLOWLIST=正则  仅对 pwsh 命令字符串生效
-//   - 部署覆盖: PII_GUARD_PY=<python 解释器>、PII_GUARD_REPO=<仓库根>；allowlist 正则非法时忽略并告警
+//   - 部署覆盖: PII_GUARD_NODE=<node 可执行文件，默认 process.execPath；兼容旧名 PII_GUARD_PY>、PII_GUARD_REPO=<仓库根>；allowlist 正则非法时忽略并告警
 //   - 显示侧还原（方案 B, 门禁 #4）: 订阅 agent/assistant-stream（prepend+global, 先于
 //     session-controller 折叠器), 把助手文本流里的占位符还原/打码后进 GUI。
 //     只改显示流, 不改会话存储与模型上下文（持久化发生在 live.push() 内部, 早于 emit）。
@@ -58,7 +58,11 @@ const WRITE_TEXT_KEYS = new Set([
 const MAX_JOB_BYTES = 256_000;
 const TRUNC_MARK = "\n[pii-guard] output truncated to 256000 bytes before redaction";
 const BLOCK_MARK = "[pii-guard] PII redaction service unavailable; tool result blocked (fail-closed). Retry, or set PII_GUARD_FAIL_OPEN=1 for troubleshooting.";
-const PY = process.env.PII_GUARD_PY ?? "python";
+// Node 引擎：常驻服务改为 spawn Node 子进程，彻底去除 Python 前置依赖。
+// 默认用当前 dsh 宿主进程的 node（process.execPath，dsh 必带 Node ≥24.9）。
+// 兼容旧环境变量名 PII_GUARD_PY：语义由「python 解释器」变为「node 可执行文件」，
+// 这样设置过 PII_GUARD_PY 的部署无需改名；烟测仍可用它指向不存在的 bin 验证 fail-closed。
+const NODE_BIN = process.env.PII_GUARD_NODE ?? process.env.PII_GUARD_PY ?? process.execPath;
 // S3: 仓库位置解析必须与 dsh-pii-guard-terms 的 resolveRepo 对齐——
 //   config.repo（宿主传入的 bundle config）> env PII_GUARD_REPO > 推断默认值。
 // 原先只认 env，导致「只配 bundle config.repo」时 terms 写 A 路径、guard 读 B 路径，
@@ -66,13 +70,13 @@ const PY = process.env.PII_GUARD_PY ?? "python";
 // FIX-1: 默认兜底不再写死作者路径，改为从 import.meta.url 推断仓库候选。
 //   本插件位于 <root>/plugins/dsh-pii-guard/lib/index.js；从 lib 目录向上三级
 //   才是 root（lib -> dsh-pii-guard -> plugins -> root）。部署态 root 是 DSH_HOME
-//   （无 presidio_pii/server.py），仓库态则是仓库根（含 presidio_pii/server.py）。
+//   （无 node_pii/server.mjs），仓库态则是仓库根（含 node_pii/server.mjs）。
 //   用该哨兵文件区分：命中则返回仓库根；否则返回空串并由调用方告警要求显式配置。
 function inferRepoFromModule() {
   try {
     const here = dirname(fileURLToPath(import.meta.url));
     const candidate = resolvePath(here, "..", "..", "..");
-    return existsSync(resolvePath(candidate, "presidio_pii", "server.py"))
+    return existsSync(resolvePath(candidate, "node_pii", "server.mjs"))
       ? candidate.replace(/\\/g, "/").replace(/\/+$/, "")
       : "";
   } catch {
@@ -90,7 +94,7 @@ function resolveRepo(config) {
   return resolved;
 }
 let REPO = resolveRepo(null);
-let SERVER = REPO + "/presidio_pii/server.py";
+let SERVER = REPO + "/node_pii/server.mjs";
 let HOOK_LOG = REPO + "/.pii_presidio_store/hook_log.jsonl";
 const SID = "pii-guard-" + process.pid;
 const CALL_TIMEOUT_MS = 30_000;
@@ -247,7 +251,7 @@ function retireService(handle) {
 function ensureService() {
   if (svc) return svc;
   const handle = { proc: null, pending: new Map(), rl: null };
-  const proc = spawn(PY, [SERVER], {
+  const proc = spawn(NODE_BIN, [SERVER], {
     cwd: REPO,
     stdio: ["pipe", "pipe", "inherit"],
   });
@@ -276,7 +280,7 @@ function ensureService() {
     if (svc === handle) svc = null;
   };
   proc.on("exit", () => die("pii server exited"));
-  // spawn 失败（如 PATH 里没有 python）必须兜住: 否则 Node 的未处理 error 事件会终止宿主进程
+  // spawn 失败（如 PATH 里没有 node、或 NODE_BIN 指向不存在的 bin）必须兜住: 否则 Node 的未处理 error 事件会终止宿主进程
   proc.on("error", (err) => die(`pii server spawn failed: ${err?.code ?? err?.message ?? err}`));
   return handle;
 }
@@ -526,7 +530,7 @@ function shellBypassReason(exec) {
 function configurePaths(config) {
   const repo = resolveRepo(config);
   REPO = repo;
-  SERVER = repo + "/presidio_pii/server.py";
+  SERVER = repo + "/node_pii/server.mjs";
   HOOK_LOG = repo + "/.pii_presidio_store/hook_log.jsonl";
   GUARD_SETTINGS_FILE = repo + "/.pii_presidio_store/guard-settings.json";
   // 路径可能变了：清掉按 mtime+size 缓存的设置，下一次 readSettings 重新读新路径

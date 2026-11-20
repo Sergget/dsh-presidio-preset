@@ -1,4 +1,4 @@
-# install.ps1 — presidio-pii 预设参数化安装脚本（FIX-1 / FIX-6 配置源部分）
+﻿# install.ps1 — presidio-pii 预设参数化安装脚本（FIX-1 / FIX-6 配置源部分）
 #
 # 用法（在仓库根或任意目录）：
 #   powershell -ExecutionPolicy Bypass -File <repo>\tools\install.ps1 `
@@ -17,7 +17,10 @@
 #   （模板）；如需按本机路径生效，去掉 -DryRun 生成 installed 后手动核对，
 #   或由上层安装流程把 installed 内容作为该机 patch 源。模板自身永不被覆盖。
 #
-# 版本校验（FIX-9）：仅接受 Python 3.9~3.13，超出或无法解析即报错退出。
+# 运行时校验（去 Python 化）：本预设的 PII 引擎已改为 Node 原生实现（node_pii/），
+#   guard 通过 spawn(node) 拉起常驻服务，不再需要 Python。
+#   有 dsh 即必有 Node ≥24.9；这里校验 Node 可用且 ≥22.5（node:sqlite 最低版本）。
+#   server.mjs 存在性作为「引擎已随仓库落地」的哨兵。
 #
 # 本脚本不含任何硬编码绝对路径。
 
@@ -52,18 +55,24 @@ Log "Repo    = $Repo"
 Log "DshHome = $DshHome"
 Log "DryRun  = $($DryRun.IsPresent)"
 
-# --- 1b. Python 版本校验（FIX-9）------------------------------------------
-$pyCmd = Get-Command python -ErrorAction SilentlyContinue
-if (-not $pyCmd) { Fail 'PATH 中未找到 python。请安装 Python 3.9~3.13 并确保 python 在 PATH 中。' }
-$verText = "$( & python --version 2>&1 )"
-$verMatch = [regex]::Match($verText, '(\d+)\.(\d+)')
-if (-not $verMatch.Success) { Fail "无法解析 Python 版本: '$verText'。请使用官方 CPython 3.9~3.13。" }
-$pyMajor = [int]$verMatch.Groups[1].Value
-$pyMinor = [int]$verMatch.Groups[2].Value
-if (-not ($pyMajor -eq 3 -and $pyMinor -ge 9 -and $pyMinor -le 13)) {
-    Fail "Python 版本 $pyMajor.$pyMinor 不在支持范围（3.9~3.13）。请切换受支持版本后重试。"
+# --- 1b. Node 运行时校验（去 Python 化）-------------------------------------
+$nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+if (-not $nodeCmd) { Fail 'PATH 中未找到 node。安装 dsh 时应随附 Node ≥24.9，请确认 node 在 PATH 中。' }
+$verText = "$( & node --version 2>&1 )"
+$verMatch = [regex]::Match($verText, 'v?(\d+)\.(\d+)')
+if (-not $verMatch.Success) { Fail "无法解析 Node 版本: '$verText'。" }
+$nodeMajor = [int]$verMatch.Groups[1].Value
+$nodeMinor = [int]$verMatch.Groups[2].Value
+# node:sqlite 自 22.5.0 稳定可用；dsh 0.2.x 要求 ≥24.9，这里取保守下限 22.5
+if ($nodeMajor -lt 22 -or ($nodeMajor -eq 22 -and $nodeMinor -lt 5)) {
+    Fail "Node 版本 $nodeMajor.$nodeMinor 过低（需 ≥22.5 以使用 node:sqlite）。请升级 Node 或使用 dsh 自带的 Node。"
 }
-Log "Python 版本 $pyMajor.$pyMinor —— PASS（支持范围 3.9~3.13）"
+Log "Node 版本 $nodeMajor.$nodeMinor —— PASS（≥22.5，node:sqlite 可用）"
+
+# 引擎落地哨兵：Node 引擎 server.mjs 必须存在于仓库中
+$engineEntry = Join-Path $Repo 'node_pii/server.mjs'
+if (-not (Test-Path $engineEntry)) { Fail "找不到 Node 引擎入口: $engineEntry（仓库不完整？）" }
+Log "Node 引擎入口存在 —— PASS：$engineEntry"
 
 # --- 2. 读模板，替换占位符，生成 installed patch ---------------------------
 $template = Join-Path $Repo '.agent-presets/presidio-pii/bundle/cordis.patch.yml'

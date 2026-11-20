@@ -1,0 +1,566 @@
+[
+  {
+    "id": 1,
+    "text": "手机13800138000联系",
+    "whitelist": [],
+    "redacted": "手机⟦PII:PHONE_NUMBER:0001⟧联系",
+    "n": 1,
+    "map": {
+      "⟦PII:PHONE_NUMBER:0001⟧": "13800138000"
+    },
+    "entity_counts": {
+      "PHONE_NUMBER": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 2,
+    "text": "发送到 a.b@example.com 即可",
+    "whitelist": [],
+    "redacted": "发送到 ⟦PII:EMAIL_ADDRESS:0001⟧ 即可",
+    "n": 1,
+    "map": {
+      "⟦PII:EMAIL_ADDRESS:0001⟧": "a.b@example.com"
+    },
+    "entity_counts": {
+      "EMAIL_ADDRESS": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 3,
+    "text": "身份证号 110101199003077890 请核对",
+    "whitelist": [],
+    "redacted": "身份证号 ⟦PII:ID_NUMBER:0001⟧ 请核对",
+    "n": 1,
+    "map": {
+      "⟦PII:ID_NUMBER:0001⟧": "110101199003077890"
+    },
+    "entity_counts": {
+      "ID_NUMBER": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 4,
+    "text": "证件号 110101199003077899",
+    "whitelist": [],
+    "redacted": "证件号 ⟦PII:ID_NUMBER:0001⟧",
+    "n": 1,
+    "map": {
+      "⟦PII:ID_NUMBER:0001⟧": "110101199003077899"
+    },
+    "entity_counts": {
+      "ID_NUMBER": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 5,
+    "text": "证件号 11010119900307789X",
+    "whitelist": [],
+    "redacted": "证件号 ⟦PII:ID_NUMBER:0001⟧",
+    "n": 1,
+    "map": {
+      "⟦PII:ID_NUMBER:0001⟧": "11010119900307789X"
+    },
+    "entity_counts": {
+      "ID_NUMBER": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 6,
+    "text": "统一代码 91110000123456787H 已登记",
+    "whitelist": [],
+    "redacted": "统一代码 ⟦PII:CREDIT_CODE:0001⟧ 已登记",
+    "n": 1,
+    "map": {
+      "⟦PII:CREDIT_CODE:0001⟧": "91110000123456787H"
+    },
+    "entity_counts": {
+      "CREDIT_CODE": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 7,
+    "text": "办公电话 0551-64845129 工作日联系",
+    "whitelist": [],
+    "redacted": "办公电话 ⟦PII:PHONE_NUMBER:0001⟧ 工作日联系",
+    "n": 1,
+    "map": {
+      "⟦PII:PHONE_NUMBER:0001⟧": "0551-64845129"
+    },
+    "entity_counts": {
+      "PHONE_NUMBER": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 8,
+    "text": "服务器 IP 192.168.1.100 和 8.8.8.8",
+    "whitelist": [],
+    "redacted": "服务器 IP ⟦PII:IP_ADDRESS:0001⟧ 和 ⟦PII:IP_ADDRESS:0002⟧",
+    "n": 2,
+    "map": {
+      "⟦PII:IP_ADDRESS:0001⟧": "192.168.1.100",
+      "⟦PII:IP_ADDRESS:0002⟧": "8.8.8.8"
+    },
+    "entity_counts": {
+      "IP_ADDRESS": 2
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 9,
+    "text": "MAC 地址 00:1A:2B:3C:4D:5E",
+    "whitelist": [],
+    "redacted": "MAC 地址 ⟦PII:MAC_ADDRESS:0001⟧",
+    "n": 1,
+    "map": {
+      "⟦PII:MAC_ADDRESS:0001⟧": "00:1A:2B:3C:4D:5E"
+    },
+    "entity_counts": {
+      "MAC_ADDRESS": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 10,
+    "text": "手机号 １３８００１３８０００ 请查收",
+    "whitelist": [],
+    "redacted": "手机号 ⟦PII:PHONE_NUMBER:0001⟧ 请查收",
+    "n": 1,
+    "map": {
+      "⟦PII:PHONE_NUMBER:0001⟧": "１３８００１３８０００"
+    },
+    "entity_counts": {
+      "PHONE_NUMBER": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 11,
+    "text": "手机 138 0013 8000 谢谢",
+    "whitelist": [],
+    "redacted": "手机 ⟦PII:PHONE_NUMBER:0001⟧ 谢谢",
+    "n": 1,
+    "map": {
+      "⟦PII:PHONE_NUMBER:0001⟧": "138 0013 8000"
+    },
+    "entity_counts": {
+      "PHONE_NUMBER": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 12,
+    "text": "身份证 110101-19900307-7890 已登记",
+    "whitelist": [],
+    "redacted": "身份证 ⟦PII:ID_NUMBER:0001⟧ 已登记",
+    "n": 1,
+    "map": {
+      "⟦PII:ID_NUMBER:0001⟧": "110101-19900307-7890"
+    },
+    "entity_counts": {
+      "ID_NUMBER": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 13,
+    "text": "卡号 6222 0211 1111 1111 234 有效",
+    "whitelist": [],
+    "redacted": "卡号 ⟦PII:BANK_CARD:0001⟧ 有效",
+    "n": 1,
+    "map": {
+      "⟦PII:BANK_CARD:0001⟧": "6222 0211 1111 1111 234"
+    },
+    "entity_counts": {
+      "BANK_CARD": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 14,
+    "text": "李明在开会",
+    "whitelist": [],
+    "redacted": "⟦PII:PERSON:0001⟧在开会",
+    "n": 1,
+    "map": {
+      "⟦PII:PERSON:0001⟧": "李明"
+    },
+    "entity_counts": {
+      "PERSON": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 15,
+    "text": "电话留给李飞",
+    "whitelist": [],
+    "redacted": "电话留给⟦PII:PERSON:0001⟧",
+    "n": 1,
+    "map": {
+      "⟦PII:PERSON:0001⟧": "李飞"
+    },
+    "entity_counts": {
+      "PERSON": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 16,
+    "text": "张伟是中国人",
+    "whitelist": [],
+    "redacted": "⟦PII:PERSON:0001⟧是中国人",
+    "n": 1,
+    "map": {
+      "⟦PII:PERSON:0001⟧": "张伟"
+    },
+    "entity_counts": {
+      "PERSON": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 17,
+    "text": "项目负责人：刘志强；",
+    "whitelist": [],
+    "redacted": "⟦PII:JOB_TITLE:0001⟧：⟦PII:PERSON:0001⟧；",
+    "n": 2,
+    "map": {
+      "⟦PII:JOB_TITLE:0001⟧": "项目负责人",
+      "⟦PII:PERSON:0001⟧": "刘志强"
+    },
+    "entity_counts": {
+      "JOB_TITLE": 1,
+      "PERSON": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 18,
+    "text": "由张三负责该项目的实施",
+    "whitelist": [],
+    "redacted": "由张三负责该项目的实施",
+    "n": 0,
+    "map": {},
+    "entity_counts": {},
+    "n_whitelisted": 0
+  },
+  {
+    "id": 19,
+    "text": "联系人：高鹏",
+    "whitelist": [],
+    "redacted": "联系人：⟦PII:PERSON:0001⟧",
+    "n": 1,
+    "map": {
+      "⟦PII:PERSON:0001⟧": "高鹏"
+    },
+    "entity_counts": {
+      "PERSON": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 20,
+    "text": "马晓东、宋佳参加评审",
+    "whitelist": [],
+    "redacted": "⟦PII:PERSON:0001⟧、⟦PII:PERSON:0002⟧参加评审",
+    "n": 2,
+    "map": {
+      "⟦PII:PERSON:0001⟧": "马晓东",
+      "⟦PII:PERSON:0002⟧": "宋佳"
+    },
+    "entity_counts": {
+      "PERSON": 2
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 21,
+    "text": "2名学生荣获宋庆龄奖学金",
+    "whitelist": [],
+    "redacted": "2名学生荣获⟦PII:PERSON:0001⟧龄奖学金",
+    "n": 1,
+    "map": {
+      "⟦PII:PERSON:0001⟧": "宋庆"
+    },
+    "entity_counts": {
+      "PERSON": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 22,
+    "text": "再查李明, 手机 13800138000",
+    "whitelist": [],
+    "redacted": "再查⟦PII:PERSON:0001⟧, 手机 ⟦PII:PHONE_NUMBER:0001⟧",
+    "n": 2,
+    "map": {
+      "⟦PII:PERSON:0001⟧": "李明",
+      "⟦PII:PHONE_NUMBER:0001⟧": "13800138000"
+    },
+    "entity_counts": {
+      "PERSON": 1,
+      "PHONE_NUMBER": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 23,
+    "text": "张伟是中国银行北京市朝阳区支行行长",
+    "whitelist": [],
+    "redacted": "⟦PII:PERSON:0001⟧是中国银行⟦PII:LOCATION:0001⟧支行行长",
+    "n": 2,
+    "map": {
+      "⟦PII:PERSON:0001⟧": "张伟",
+      "⟦PII:LOCATION:0001⟧": "北京市朝阳区"
+    },
+    "entity_counts": {
+      "PERSON": 1,
+      "LOCATION": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 24,
+    "text": "合肥市政协信息化平台项目",
+    "whitelist": [],
+    "redacted": "⟦PII:LOCATION:0001⟧政协信息化平台项目",
+    "n": 1,
+    "map": {
+      "⟦PII:LOCATION:0001⟧": "合肥市"
+    },
+    "entity_counts": {
+      "LOCATION": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 25,
+    "text": "参照安徽省数据资源管理局的做法",
+    "whitelist": [],
+    "redacted": "⟦PII:ORGANIZATION:0001⟧的做法",
+    "n": 1,
+    "map": {
+      "⟦PII:ORGANIZATION:0001⟧": "参照安徽省数据资源管理局"
+    },
+    "entity_counts": {
+      "ORGANIZATION": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 26,
+    "text": "他担任总经理一职",
+    "whitelist": [],
+    "redacted": "他担任⟦PII:JOB_TITLE:0001⟧一职",
+    "n": 1,
+    "map": {
+      "⟦PII:JOB_TITLE:0001⟧": "总经理"
+    },
+    "entity_counts": {
+      "JOB_TITLE": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 27,
+    "text": "地址：成都市武侯区天府大道北段1700号",
+    "whitelist": [],
+    "redacted": "地址：⟦PII:LOCATION:0001⟧",
+    "n": 1,
+    "map": {
+      "⟦PII:LOCATION:0001⟧": "成都市武侯区天府大道北段1700号"
+    },
+    "entity_counts": {
+      "LOCATION": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 28,
+    "text": "重庆市渝北区经纪有限公司",
+    "whitelist": [],
+    "redacted": "⟦PII:ORGANIZATION:0001⟧",
+    "n": 1,
+    "map": {
+      "⟦PII:ORGANIZATION:0001⟧": "重庆市渝北区经纪有限公司"
+    },
+    "entity_counts": {
+      "ORGANIZATION": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 29,
+    "text": "内容要求如下",
+    "whitelist": [],
+    "redacted": "内容要求如下",
+    "n": 0,
+    "map": {},
+    "entity_counts": {},
+    "n_whitelisted": 0
+  },
+  {
+    "id": 30,
+    "text": "本项目分为第一部",
+    "whitelist": [],
+    "redacted": "本项目分为第一部",
+    "n": 0,
+    "map": {},
+    "entity_counts": {},
+    "n_whitelisted": 0
+  },
+  {
+    "id": 31,
+    "text": "所有部门都要参与",
+    "whitelist": [],
+    "redacted": "所有部门都要参与",
+    "n": 0,
+    "map": {},
+    "entity_counts": {},
+    "n_whitelisted": 0
+  },
+  {
+    "id": 32,
+    "text": "名单：身份证、手机号、银行卡、人名等个人信息。",
+    "whitelist": [],
+    "redacted": "名单：身份证、手机号、银行卡、人名等个人信息。",
+    "n": 0,
+    "map": {},
+    "entity_counts": {},
+    "n_whitelisted": 0
+  },
+  {
+    "id": 33,
+    "text": "我校学生在比赛中荣获佳绩",
+    "whitelist": [],
+    "redacted": "我校学生在比赛中荣获佳绩",
+    "n": 0,
+    "map": {},
+    "entity_counts": {},
+    "n_whitelisted": 0
+  },
+  {
+    "id": 34,
+    "text": "全市共有德育工作者8300余人",
+    "whitelist": [],
+    "redacted": "全市共有德育工作者8300余人",
+    "n": 0,
+    "map": {},
+    "entity_counts": {},
+    "n_whitelisted": 0
+  },
+  {
+    "id": 35,
+    "text": "阳光总在风雨后",
+    "whitelist": [],
+    "redacted": "阳光总在风雨后",
+    "n": 0,
+    "map": {},
+    "entity_counts": {},
+    "n_whitelisted": 0
+  },
+  {
+    "id": 36,
+    "text": "今天天气很好, 我们去公园散步吧。",
+    "whitelist": [],
+    "redacted": "今天天气很好, 我们去公园散步吧。",
+    "n": 0,
+    "map": {},
+    "entity_counts": {},
+    "n_whitelisted": 0
+  },
+  {
+    "id": 37,
+    "text": "张伟和李明开会",
+    "whitelist": [
+      "张伟"
+    ],
+    "redacted": "张伟和⟦PII:PERSON:0001⟧开会",
+    "n": 1,
+    "map": {
+      "⟦PII:PERSON:0001⟧": "李明"
+    },
+    "entity_counts": {
+      "PERSON": 1
+    },
+    "n_whitelisted": 1
+  },
+  {
+    "id": 38,
+    "text": "合肥市数据资源局由王建国负责",
+    "whitelist": [
+      "合肥市数据资源局"
+    ],
+    "redacted": "合肥市数据资源局由⟦PII:PERSON:0001⟧国负责",
+    "n": 1,
+    "map": {
+      "⟦PII:PERSON:0001⟧": "王建"
+    },
+    "entity_counts": {
+      "PERSON": 1
+    },
+    "n_whitelisted": 1
+  },
+  {
+    "id": 39,
+    "text": "李明的手机号是13800138000",
+    "whitelist": [
+      "张伟"
+    ],
+    "redacted": "⟦PII:PERSON:0001⟧的手机号是⟦PII:PHONE_NUMBER:0001⟧",
+    "n": 2,
+    "map": {
+      "⟦PII:PERSON:0001⟧": "李明",
+      "⟦PII:PHONE_NUMBER:0001⟧": "13800138000"
+    },
+    "entity_counts": {
+      "PERSON": 1,
+      "PHONE_NUMBER": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 40,
+    "text": "张伟, 身份证 110101199003077890, 手机 13800138000, 邮箱 a.b@bank.com",
+    "whitelist": [],
+    "redacted": "⟦PII:PERSON:0001⟧, 身份证 ⟦PII:ID_NUMBER:0001⟧, 手机 ⟦PII:PHONE_NUMBER:0001⟧, 邮箱 ⟦PII:EMAIL_ADDRESS:0001⟧",
+    "n": 4,
+    "map": {
+      "⟦PII:PERSON:0001⟧": "张伟",
+      "⟦PII:ID_NUMBER:0001⟧": "110101199003077890",
+      "⟦PII:PHONE_NUMBER:0001⟧": "13800138000",
+      "⟦PII:EMAIL_ADDRESS:0001⟧": "a.b@bank.com"
+    },
+    "entity_counts": {
+      "PERSON": 1,
+      "ID_NUMBER": 1,
+      "PHONE_NUMBER": 1,
+      "EMAIL_ADDRESS": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 41,
+    "text": "联系人李明 13800138000 住北京市朝阳区",
+    "whitelist": [],
+    "redacted": "联系人⟦PII:PERSON:0001⟧ ⟦PII:PHONE_NUMBER:0001⟧ 住⟦PII:LOCATION:0001⟧",
+    "n": 3,
+    "map": {
+      "⟦PII:PERSON:0001⟧": "李明",
+      "⟦PII:PHONE_NUMBER:0001⟧": "13800138000",
+      "⟦PII:LOCATION:0001⟧": "北京市朝阳区"
+    },
+    "entity_counts": {
+      "PERSON": 1,
+      "PHONE_NUMBER": 1,
+      "LOCATION": 1
+    },
+    "n_whitelisted": 0
+  }
+]

@@ -1,11 +1,11 @@
-<#
+﻿<#
 .SYNOPSIS
   DSH Presidio PII 安装后一键自检（FIX-4）。
 
 .DESCRIPTION
   一条命令输出 5 项 PASS/FAIL/SKIP 及失败原因：
-    1. Python 导入：python -c "import presidio_pii; print(presidio_pii.__file__)"
-    2. CLI demo：python -m presidio_pii.cli --demo（检查 exit code）
+    1. Node 引擎语法：node --check node_pii/server.mjs（去 Python 化后引擎为 Node 原生）
+    2. Node 引擎协议 smoke：node tests/node/protocol-smoke.mjs（redact→restore full/mask 全链路）
     3. bundle enabled：优先 plugin_manager CLI；当前 shell 无该命令则 SKIP + 明确指引
        （bundle patch 通过 link 注入，不写进 profile patch 文件，grep 会误判"没生效"）
     4. guard 插件加载：<DSH_HOME>/plugins/dsh-pii-guard/lib/index.js 存在且与仓库版 sha256 一致
@@ -50,33 +50,33 @@ Write-Output " Repo    : $Repo"
 Write-Output " DshHome : $DshHome"
 Write-Output ""
 
-# Python 检查需在仓库根目录执行（presidio_pii 是本地包，pip install -e . 后从 cwd 可导入）
+# Node 引擎检查需在仓库根目录执行（node_pii 是仓库内模块，server.mjs 依赖相对路径词表）
 Push-Location $Repo
 try {
-  # ── 1. Python 导入 ─────────────────────────────────────────────────────
+  # ── 1. Node 引擎语法 ──────────────────────────────────────────────────
   try {
-    $pyOut = & python -c "import presidio_pii; print(presidio_pii.__file__)" 2>&1
-    $pyExit = $LASTEXITCODE
-    if ($pyExit -eq 0 -and ("$pyOut" -match "presidio_pii")) {
-      Add-Result -Name "Python 导入 presidio_pii" -Status PASS -Detail "模块路径: $(($pyOut | Select-Object -Last 1))"
+    $checkOut = & node --check node_pii/server.mjs 2>&1
+    $checkExit = $LASTEXITCODE
+    if ($checkExit -eq 0) {
+      Add-Result -Name "Node 引擎语法" -Status PASS -Detail "node --check node_pii/server.mjs exit 0"
     } else {
-      Add-Result -Name "Python 导入 presidio_pii" -Status FAIL -Detail "exit=$pyExit; 输出: $pyOut（检查是否已 pip install -e . 且 cwd 指向 Repo）"
+      Add-Result -Name "Node 引擎语法" -Status FAIL -Detail "exit=$checkExit; 输出: $checkOut"
     }
   } catch {
-    Add-Result -Name "Python 导入 presidio_pii" -Status FAIL -Detail "异常: $($_.Exception.Message)"
+    Add-Result -Name "Node 引擎语法" -Status FAIL -Detail "异常: $($_.Exception.Message)"
   }
 
-  # ── 2. CLI demo ───────────────────────────────────────────────────────
+  # ── 2. Node 引擎协议 smoke（redact → restore full/mask）───────────────
   try {
-    $cliOut = & python -m presidio_pii.cli --demo 2>&1
-    $cliExit = $LASTEXITCODE
-    if ($cliExit -eq 0) {
-      Add-Result -Name "CLI demo" -Status PASS -Detail "exit code 0（脱敏输出正常）"
+    $smokeOut = & node tests/node/protocol-smoke.mjs 2>&1
+    $smokeExit = $LASTEXITCODE
+    if ($smokeExit -eq 0) {
+      Add-Result -Name "Node 引擎协议 smoke" -Status PASS -Detail "PROTOCOL_SMOKE 3/3（mask 不泄露原文）"
     } else {
-      Add-Result -Name "CLI demo" -Status FAIL -Detail "exit=$cliExit; 输出: $(($cliOut | Select-Object -Last 2) -join ' | ')"
+      Add-Result -Name "Node 引擎协议 smoke" -Status FAIL -Detail "exit=$smokeExit; 输出: $(($smokeOut | Select-Object -Last 4) -join ' | ')"
     }
   } catch {
-    Add-Result -Name "CLI demo" -Status FAIL -Detail "异常: $($_.Exception.Message)"
+    Add-Result -Name "Node 引擎协议 smoke" -Status FAIL -Detail "异常: $($_.Exception.Message)"
   }
 } finally {
   Pop-Location
