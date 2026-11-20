@@ -69,6 +69,69 @@ def fmt_versions() -> str:
 # --------------------------------------------------------------------------- #
 # 1. 读取侧拦截（引擎层；DSH 进程内 E2E 见第 2 项）
 # --------------------------------------------------------------------------- #
+# Phase 0.9：preset 声明的每一类实体都必须有可复现探针。
+# 新增实体类型时同步加探针；缺探针即 FAIL（差集不允许静默通过）。
+ENTITY_PROBES = {
+    "ID_NUMBER": "身份证号 110101199003077890 请核对",
+    "PHONE_NUMBER": "手机13800138000联系",
+    "EMAIL_ADDRESS": "发送到 a.b@example.com 即可",
+    "CREDIT_CODE": "统一代码 91110000123456787H 已登记",
+    "BANK_CARD": "卡号 6222 0211 1111 1111 234 有效",
+    "PASSPORT": "护照号 E12345678 请核对",
+    "LICENSE_PLATE": "车牌 皖A12345 已登记",
+    "IP_ADDRESS": "服务器 IP 192.168.1.100 运行",
+    "MAC_ADDRESS": "MAC 地址 00:1A:2B:3C:4D:5E",
+    "PERSON": "李明在开会",
+    "LOCATION": "地址：成都市武侯区天府大道北段1700号",
+    "ORGANIZATION": "参照安徽省数据资源管理局的做法",
+    "JOB_TITLE": "他担任总经理一职",
+    "AGE": "年龄 45 周岁，身体健康",
+    "BIRTH_DATE": "出生日期：1990-03-07",
+    "GENDER": "性别：男，民族：汉族",
+    "ETHNICITY": "民族：汉族",
+    "EDUCATION": "学历：硕士研究生",
+    "IM_ACCOUNT": "微信：zhangsan2024 常联系",
+    "EMPLOYEE_ID": "工号：EMP-000123 请登记",
+}
+
+
+def _preset_entity_types() -> list:
+    """读 preset.json 声明的实体类型；读不到返回空表（由调用方判定 FAIL）。"""
+    preset = REPO / ".agent-presets" / "presidio-pii" / "preset.json"
+    try:
+        data = json.loads(preset.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    types = data.get("entity_types")
+    return list(types) if isinstance(types, list) else []
+
+
+def _check_entity_coverage(db_path) -> tuple:
+    """逐类探针断言。返回 (ok, missing, no_probe)。"""
+    from presidio_pii.engine import PresidioPIIEngine
+
+    declared = _preset_entity_types()
+    if not declared:
+        return False, ["<preset entity_types 读取失败>"], []
+    rules = REPO / "rule_libraries" / "extended-fields.json"
+    eng = PresidioPIIEngine(db_path=db_path,
+                            custom_rules=str(rules) if rules.is_file() else None)
+    missing, no_probe = [], []
+    try:
+        sid = eng.registry.create_session()
+        for etype in declared:
+            probe = ENTITY_PROBES.get(etype)
+            if probe is None:
+                no_probe.append(etype)
+                continue
+            rd = eng.redact(probe, sid, f"probe-{etype}")
+            if rd.entity_counts.get(etype, 0) <= 0:
+                missing.append(f"{etype}({rd.entity_counts})")
+    finally:
+        eng.registry.close()
+    return (not missing and not no_probe), missing, no_probe
+
+
 def check_read() -> dict:
     from presidio_pii.engine import PresidioPIIEngine
 
@@ -83,14 +146,24 @@ def check_read() -> dict:
     rd2 = eng.redact(normal, "gate2", "normal-01")
     personal = sum(rd2.entity_counts.get(t, 0)
                    for t in ("PERSON", "ID_NUMBER", "PHONE_NUMBER", "BANK_CARD"))
-    ok = (rd.n_replaced > 0 and counts.get("PERSON", 0) > 0
-          and not any(n in rd.text for n in names) and ws_ok and personal == 0)
+    base_ok = (rd.n_replaced > 0 and counts.get("PERSON", 0) > 0
+               and not any(n in rd.text for n in names) and ws_ok and personal == 0)
+    # Phase 0.9：20 类逐类断言 + 差集检查（声明了却没探针 = FAIL）
+    coverage_ok, missing, no_probe = _check_entity_coverage(Path(tmp) / "cover.db")
+    ok = base_ok and coverage_ok
     ev = (f"paper-01: {counts} 共 {rd.n_replaced} 处, 明文人名 absent={not any(n in rd.text for n in names)}, "
-          f"空白序列一致={ws_ok}; normal-01 个人类实体={personal}")
-    reason = ("占位符生效且不吞分隔符，负例无个人类误报" if ok
-              else "读取侧拦截或结构保持不满足")
+          f"空白序列一致={ws_ok}; normal-01 个人类实体={personal}; "
+          f"逐类探针 {len(_preset_entity_types()) - len(no_probe) - len(missing)}/"
+          f"{len(_preset_entity_types())} 命中, 未命中={missing or '无'}, 缺探针={no_probe or '无'}")
+    if base_ok and coverage_ok:
+        reason = "占位符生效且不吞分隔符，负例无个人类误报，preset 每类实体均有命中探针"
+    elif not base_ok:
+        reason = "读取侧拦截或结构保持不满足"
+    else:
+        reason = "preset 声明了引擎产不出的实体类型，或新增类型未配探针"
     shutil.rmtree(tmp, ignore_errors=True)
     return {"status": PASS if ok else FAIL, "evidence": ev, "reason": reason}
+
 
 
 # --------------------------------------------------------------------------- #
@@ -254,7 +327,6 @@ def check_formats() -> dict:
                                "MAX_JOB_BYTES",
                                "output truncated to 256000 bytes before redaction",
                                "result?.isError && !SHELL_GUARDED.has",
-                               'svc.on("error"',
                                "shell_bypass", "PII_GUARD_SHELL_ALLOWLIST",
                                "PII_GUARD_REPO", "invalid PII_GUARD_SHELL_ALLOWLIST",
                                "PII_GUARD_SHELL",
@@ -279,6 +351,10 @@ def check_formats() -> dict:
                                  "coerceDisplayMode", "displayMode()", "isFailOpen()",
                                  "isShellDisabled()", "getAllowlist()",
                                  ) if pat not in src]
+    # 子进程 error 处理按行为断言，不锁变量名：B1 竞态修复后 svc 变成句柄对象，
+    # 真正挂 error 处理的是 proc，锁字面量会把合法重构误判成回归。
+    if not re.search(r"\.on\(\s*[\"']error[\"']", src):
+        missing.append("<child process error handler>")
 
     # v0.4：用户自定义屏蔽词 UI（dsh-pii-guard-terms 设置页）
     terms_src = REPO / "plugins" / "dsh-pii-guard-terms"
@@ -532,6 +608,30 @@ def _mask(s: str) -> str:
     return s[:3] + "***" + s[-2:] if len(s) > 6 else "***"
 
 
+# 扫描器自测夹具：tests/test_release_gate_rules.py 里的字符串是**假凭据**，
+# 存在的目的就是证明扫描器能命中。按路径豁免，并且每次都把豁免条数写进
+# evidence 披露——不做静默丢弃，其他路径依旧零容忍。
+_BENIGN_SCAN_PATHS = ("tests/test_release_gate_rules.py",)
+
+
+def _is_benign(where: str) -> bool:
+    return any(where == p or where.endswith("/" + p) for p in _BENIGN_SCAN_PATHS)
+
+
+def _line_matches(body: str) -> tuple:
+    """返回 (命中列表 [(pattern, masked)], 被值白名单抑制数)。"""
+    out, suppressed = [], 0
+    for name, rx in _SECRET_PATTERNS:
+        for m in rx.finditer(body):
+            value = m.group(2) if name == "assign" and m.lastindex else m.group(0)
+            if name == "assign" and (_SAFE_VALUE.search(value or "")
+                                     or _SAFE_EXPR.search(value or "")):
+                suppressed += 1
+                continue
+            out.append((name, _mask(m.group(0))))
+    return out, suppressed
+
+
 def _scan_text(text: str, where: str) -> tuple:
     """返回 (真命中, 白名单抑制数)。抑制数只用于披露, 不静默丢弃。"""
     hits, suppressed = [], 0
@@ -539,15 +639,34 @@ def _scan_text(text: str, where: str) -> tuple:
         if line.startswith(("+++", "---")):
             continue
         body = line[1:] if line[:1] in "+-" else line
-        for name, rx in _SECRET_PATTERNS:
-            for m in rx.finditer(body):
-                value = m.group(2) if name == "assign" and m.lastindex else m.group(0)
-                if name == "assign" and (_SAFE_VALUE.search(value or "")
-                                         or _SAFE_EXPR.search(value or "")):
-                    suppressed += 1
-                    continue
-                hits.append((name, where, _mask(m.group(0))))
+        h, s = _line_matches(body)
+        hits += [(n, where, v) for n, v in h]
+        suppressed += s
     return hits, suppressed
+
+
+def _scan_history(text: str) -> tuple:
+    """按 diff 头 `+++ b/<path>` 归属文件；自测夹具豁免数单独计数披露。"""
+    hits, suppressed, benign = [], 0, 0
+    cur = ""
+    for line in text.splitlines():
+        if line.startswith("+++ "):
+            p = line[4:].strip()
+            cur = p[2:] if p.startswith("b/") else p
+            continue
+        if line.startswith(("+++", "---")):
+            continue
+        body = line[1:] if line[:1] in "+-" else line
+        h, s = _line_matches(body)
+        suppressed += s
+        if not h:
+            continue
+        if _is_benign(cur):
+            benign += len(h)
+            continue
+        where = f"history:{cur}" if cur else "history"
+        hits += [(n, where, v) for n, v in h]
+    return hits, suppressed, benign
 
 
 def check_secrets() -> dict:
@@ -557,10 +676,10 @@ def check_secrets() -> dict:
     commits = log.count("__C__")
     diff_lines = sum(1 for ln in log.splitlines()
                      if ln[:1] in "+-" and not ln.startswith(("+++", "---")))
-    hist_hits, hist_suppressed = _scan_text(log, "history")
+    hist_hits, hist_suppressed, hist_benign = _scan_history(log)
 
     rc_ls, files = run(["git", "ls-files"], timeout=120)
-    wt_hits, wt_suppressed, scanned = [], 0, 0
+    wt_hits, wt_suppressed, scanned, wt_benign = [], 0, 0, 0
     for rel in files.splitlines():
         p = REPO / rel
         if rel == "tools/release_gate.py" or not p.is_file():
@@ -573,6 +692,10 @@ def check_secrets() -> dict:
                 continue
             scanned += 1
             h, s = _scan_text(data.decode("utf-8", "replace"), rel)
+            if _is_benign(rel):
+                wt_benign += len(h)
+                wt_suppressed += s
+                continue
             wt_hits += h
             wt_suppressed += s
         except OSError:
@@ -583,16 +706,19 @@ def check_secrets() -> dict:
              if re.search(r"(^|/)(\.env|id_rsa|id_ed25519|credentials\w*\.json)$|\.(pem|pfx|p12)$", r)]
     hits = hist_hits + wt_hits
     ok = not hits and not risky
+    benign = hist_benign + wt_benign
     ev = (f"commits={commits} diff_lines={diff_lines} hist_hits={len(hist_hits)} "
           f"suppressed={hist_suppressed}; worktree_files={scanned} wt_hits={len(wt_hits)} "
-          f"suppressed={wt_suppressed} risky_files={len(risky)}")
+          f"suppressed={wt_suppressed} risky_files={len(risky)}; "
+          f"selftest_fixtures_exempted={benign} ({', '.join(_BENIGN_SCAN_PATHS)})")
     if hits:
         sample = "; ".join(f"{n}@{w}:{v}" for n, w, v in hits[:3])
         reason = f"命中 {len(hits)} 处: {sample}"
     elif risky:
         reason = f"高风险文件被追踪: {', '.join(risky[:3])}"
     else:
-        reason = "历史与工作树均无凭据命中"
+        reason = ("历史与工作树均无凭据命中（扫描器自测夹具 "
+                  f"{benign} 处按路径豁免并已披露）")
     return {"status": PASS if ok else FAIL, "evidence": ev, "reason": reason}
 
 
@@ -716,6 +842,21 @@ def _source_tree_digest() -> str:
     return hashlib.sha256(buf).hexdigest()
 
 
+def _commit_is_self_or_ancestor(bound: str, head: str) -> bool:
+    """清单绑定的提交只要等于 HEAD 或是 HEAD 的祖先就成立。
+
+    否则把清单提交进仓库这个动作本身就会让 commit_match 变成 False，
+    形成「提交清单 → 失配 → 再改清单 → 再失配」的死循环。真正的绑定强度
+    由 source_tree_sha256 保证（覆盖 wheel 打包的源码），提交只证明谱系。
+    """
+    if not bound or not head:
+        return False
+    if bound == head:
+        return True
+    rc, _ = run(["git", "merge-base", "--is-ancestor", bound, head])
+    return rc == 0
+
+
 def _verify_manifest(head: str) -> tuple:
     """校验产物级溯源清单; 返回 (ok, 证据, 原因)。"""
     if not MANIFEST_PATH.is_file():
@@ -732,10 +873,10 @@ def _verify_manifest(head: str) -> tuple:
     data = wheel.read_bytes()
     size_ok = len(data) == art.get("bytes")
     sha_ok = hashlib.sha256(data).hexdigest().lower() == str(art.get("sha256", "")).lower()
-    commit_ok = src.get("commit") == head
+    commit_ok = _commit_is_self_or_ancestor(str(src.get("commit") or ""), head)
     tree_ok = src.get("source_tree_sha256") == _source_tree_digest()
     ev = (f"manifest={art.get('filename')} bytes_ok={size_ok} sha_ok={sha_ok} "
-          f"commit_match={commit_ok} tree_digest_match={tree_ok}")
+          f"commit_ok={commit_ok} tree_digest_match={tree_ok}")
     ok = bool(size_ok and sha_ok and commit_ok and tree_ok)
     reason = ("产物级溯源通过（wheel 哈希与源码树摘要一致）" if ok
               else "发布物清单与当前 wheel/源码不一致，需重建并更新清单")

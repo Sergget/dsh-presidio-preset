@@ -311,6 +311,20 @@
   },
   {
     "id": 23,
+    "text": "员工范志强，男，45岁。",
+    "whitelist": [],
+    "redacted": "员工⟦PII:PERSON:0001⟧，男，45岁。",
+    "n": 1,
+    "map": {
+      "⟦PII:PERSON:0001⟧": "范志强"
+    },
+    "entity_counts": {
+      "PERSON": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 24,
     "text": "张伟是中国银行北京市朝阳区支行行长",
     "whitelist": [],
     "redacted": "⟦PII:PERSON:0001⟧是中国银行⟦PII:LOCATION:0001⟧支行行长",
@@ -326,7 +340,7 @@
     "n_whitelisted": 0
   },
   {
-    "id": 24,
+    "id": 25,
     "text": "合肥市政协信息化平台项目",
     "whitelist": [],
     "redacted": "⟦PII:LOCATION:0001⟧政协信息化平台项目",
@@ -340,7 +354,7 @@
     "n_whitelisted": 0
   },
   {
-    "id": 25,
+    "id": 26,
     "text": "参照安徽省数据资源管理局的做法",
     "whitelist": [],
     "redacted": "⟦PII:ORGANIZATION:0001⟧的做法",
@@ -354,7 +368,7 @@
     "n_whitelisted": 0
   },
   {
-    "id": 26,
+    "id": 27,
     "text": "他担任总经理一职",
     "whitelist": [],
     "redacted": "他担任⟦PII:JOB_TITLE:0001⟧一职",
@@ -368,7 +382,7 @@
     "n_whitelisted": 0
   },
   {
-    "id": 27,
+    "id": 28,
     "text": "地址：成都市武侯区天府大道北段1700号",
     "whitelist": [],
     "redacted": "地址：⟦PII:LOCATION:0001⟧",
@@ -382,7 +396,21 @@
     "n_whitelisted": 0
   },
   {
-    "id": 28,
+    "id": 29,
+    "text": "地址：成都市武侯区天府大道北段1700号3单元501室",
+    "whitelist": [],
+    "redacted": "地址：⟦PII:LOCATION:0001⟧",
+    "n": 1,
+    "map": {
+      "⟦PII:LOCATION:0001⟧": "成都市武侯区天府大道北段1700号3单元501室"
+    },
+    "entity_counts": {
+      "LOCATION": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 30,
     "text": "重庆市渝北区经纪有限公司",
     "whitelist": [],
     "redacted": "⟦PII:ORGANIZATION:0001⟧",
@@ -396,7 +424,191 @@
     "n_whitelisted": 0
   },
   {
-    "id": 29,
+    "id": 31,
+    "text": "他是公司总经理",
+    "whitelist": [],
+    "redacted": "他是公司⟦PII:JOB_TITLE:0001⟧",
+    "n": 1,
+    "map": {
+      "⟦PII:JOB_TITLE:0001⟧": "总经理"
+    },
+    "entity_counts": {
+      "JOB_TITLE": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 32,
+    "text": "籍贯：山东济南",
+    "whitelist": [],
+    "redacted": "籍贯：⟦PII:LOCATION:0001⟧",
+    "n": 1,
+    "map": {
+      "⟦PII:LOCATION:0001⟧": "山东济南"
+    },
+    "entity_counts": {
+      "LOCATION": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 33,
+    "text": "年龄 45 周岁，身体健康",
+    "whitelist": [],
+    "redacted": "年龄 ⟦PII:AGE:0001⟧，身体健康",
+    "n": 1,
+    "map": {
+      "⟦PII:AGE:0001⟧": "45 周岁"
+    },
+    "entity_counts": {
+      "AGE": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 34,
+    "text": "现年 38 岁，从事财务工作",
+    "whitelist": [],
+    "redacted": "现年 ⟦PII:AGE:0001⟧，从事财务工作",
+    "n": 1,
+    "map": {
+      "⟦PII:AGE:0001⟧": "38 岁"
+    },
+    "entity_counts": {
+      "AGE": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 35,
+    "text": "出生日期：1990-03-07",
+    "whitelist": [],
+    "redacted": "出生日期：⟦PII:BIRTH_DATE:0001⟧",
+    "n": 1,
+    "map": {
+      "⟦PII:BIRTH_DATE:0001⟧": "1990-03-07"
+    },
+    "entity_counts": {
+      "BIRTH_DATE": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 36,
+    "text": "他生于 1985年12月，现居合肥",
+    "whitelist": [],
+    "redacted": "他生⟦PII:PERSON:0001⟧ ⟦PII:BIRTH_DATE:0001⟧，现居合肥",
+    "n": 2,
+    "map": {
+      "⟦PII:PERSON:0001⟧": "于",
+      "⟦PII:BIRTH_DATE:0001⟧": "1985年12月"
+    },
+    "entity_counts": {
+      "PERSON": 1,
+      "BIRTH_DATE": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 37,
+    "text": "性别：男，民族：汉族",
+    "whitelist": [],
+    "redacted": "性别：⟦PII:GENDER:0001⟧，民族：⟦PII:ETHNICITY:0001⟧",
+    "n": 2,
+    "map": {
+      "⟦PII:GENDER:0001⟧": "男",
+      "⟦PII:ETHNICITY:0001⟧": "汉族"
+    },
+    "entity_counts": {
+      "GENDER": 1,
+      "ETHNICITY": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 38,
+    "text": "学历：硕士研究生",
+    "whitelist": [],
+    "redacted": "学历：⟦PII:EDUCATION:0001⟧",
+    "n": 1,
+    "map": {
+      "⟦PII:EDUCATION:0001⟧": "硕士研究生"
+    },
+    "entity_counts": {
+      "EDUCATION": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 39,
+    "text": "微信：zhangsan2024 常联系",
+    "whitelist": [],
+    "redacted": "微信：⟦PII:IM_ACCOUNT:0001⟧ 常联系",
+    "n": 1,
+    "map": {
+      "⟦PII:IM_ACCOUNT:0001⟧": "zhangsan2024"
+    },
+    "entity_counts": {
+      "IM_ACCOUNT": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 40,
+    "text": "工号：EMP-000123 请登记",
+    "whitelist": [],
+    "redacted": "工号：⟦PII:EMPLOYEE_ID:0001⟧ 请登记",
+    "n": 1,
+    "map": {
+      "⟦PII:EMPLOYEE_ID:0001⟧": "EMP-000123"
+    },
+    "entity_counts": {
+      "EMPLOYEE_ID": 1
+    },
+    "n_whitelisted": 0
+  },
+  {
+    "id": 41,
+    "text": "20 岁以上人员需参加体检",
+    "whitelist": [],
+    "redacted": "20 岁以上人员需参加体检",
+    "n": 0,
+    "map": {},
+    "entity_counts": {},
+    "n_whitelisted": 0
+  },
+  {
+    "id": 42,
+    "text": "3 岁以下儿童免票",
+    "whitelist": [],
+    "redacted": "3 岁以下儿童免票",
+    "n": 0,
+    "map": {},
+    "entity_counts": {},
+    "n_whitelisted": 0
+  },
+  {
+    "id": 43,
+    "text": "本次植树树龄 15 岁",
+    "whitelist": [],
+    "redacted": "本次植树树龄 15 岁",
+    "n": 0,
+    "map": {},
+    "entity_counts": {},
+    "n_whitelisted": 0
+  },
+  {
+    "id": 44,
+    "text": "该政策适用于全市 8300 余名职工",
+    "whitelist": [],
+    "redacted": "该政策适用于全市 8300 余名职工",
+    "n": 0,
+    "map": {},
+    "entity_counts": {},
+    "n_whitelisted": 0
+  },
+  {
+    "id": 45,
     "text": "内容要求如下",
     "whitelist": [],
     "redacted": "内容要求如下",
@@ -406,7 +618,7 @@
     "n_whitelisted": 0
   },
   {
-    "id": 30,
+    "id": 46,
     "text": "本项目分为第一部",
     "whitelist": [],
     "redacted": "本项目分为第一部",
@@ -416,7 +628,7 @@
     "n_whitelisted": 0
   },
   {
-    "id": 31,
+    "id": 47,
     "text": "所有部门都要参与",
     "whitelist": [],
     "redacted": "所有部门都要参与",
@@ -426,7 +638,7 @@
     "n_whitelisted": 0
   },
   {
-    "id": 32,
+    "id": 48,
     "text": "名单：身份证、手机号、银行卡、人名等个人信息。",
     "whitelist": [],
     "redacted": "名单：身份证、手机号、银行卡、人名等个人信息。",
@@ -436,7 +648,7 @@
     "n_whitelisted": 0
   },
   {
-    "id": 33,
+    "id": 49,
     "text": "我校学生在比赛中荣获佳绩",
     "whitelist": [],
     "redacted": "我校学生在比赛中荣获佳绩",
@@ -446,7 +658,7 @@
     "n_whitelisted": 0
   },
   {
-    "id": 34,
+    "id": 50,
     "text": "全市共有德育工作者8300余人",
     "whitelist": [],
     "redacted": "全市共有德育工作者8300余人",
@@ -456,7 +668,7 @@
     "n_whitelisted": 0
   },
   {
-    "id": 35,
+    "id": 51,
     "text": "阳光总在风雨后",
     "whitelist": [],
     "redacted": "阳光总在风雨后",
@@ -466,7 +678,7 @@
     "n_whitelisted": 0
   },
   {
-    "id": 36,
+    "id": 52,
     "text": "今天天气很好, 我们去公园散步吧。",
     "whitelist": [],
     "redacted": "今天天气很好, 我们去公园散步吧。",
@@ -476,7 +688,7 @@
     "n_whitelisted": 0
   },
   {
-    "id": 37,
+    "id": 53,
     "text": "张伟和李明开会",
     "whitelist": [
       "张伟"
@@ -492,7 +704,7 @@
     "n_whitelisted": 1
   },
   {
-    "id": 38,
+    "id": 54,
     "text": "合肥市数据资源局由王建国负责",
     "whitelist": [
       "合肥市数据资源局"
@@ -508,7 +720,7 @@
     "n_whitelisted": 1
   },
   {
-    "id": 39,
+    "id": 55,
     "text": "李明的手机号是13800138000",
     "whitelist": [
       "张伟"
@@ -526,7 +738,7 @@
     "n_whitelisted": 0
   },
   {
-    "id": 40,
+    "id": 56,
     "text": "张伟, 身份证 110101199003077890, 手机 13800138000, 邮箱 a.b@bank.com",
     "whitelist": [],
     "redacted": "⟦PII:PERSON:0001⟧, 身份证 ⟦PII:ID_NUMBER:0001⟧, 手机 ⟦PII:PHONE_NUMBER:0001⟧, 邮箱 ⟦PII:EMAIL_ADDRESS:0001⟧",
@@ -546,7 +758,7 @@
     "n_whitelisted": 0
   },
   {
-    "id": 41,
+    "id": 57,
     "text": "联系人李明 13800138000 住北京市朝阳区",
     "whitelist": [],
     "redacted": "联系人⟦PII:PERSON:0001⟧ ⟦PII:PHONE_NUMBER:0001⟧ 住⟦PII:LOCATION:0001⟧",

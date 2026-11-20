@@ -10,6 +10,8 @@ import { SessionRegistry } from '../../node_pii/db.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '../..');
 const GOLDEN = JSON.parse(fs.readFileSync(path.join(HERE, 'golden.json'), 'utf8'));
+// Phase 0.8：golden 含 7 个扩展字段样本，双端必须加载同一份规则库才可比
+const EXTENDED_RULES = path.join(REPO, 'rule_libraries', 'extended-fields.json');
 
 let passed = 0, failed = 0;
 const failures = [];
@@ -17,7 +19,9 @@ const failures = [];
 for (const g of GOLDEN) {
   const registry = new SessionRegistry(':memory:');
   const sid = registry.createSession();
-  const engine = new Engine({ repoDir: REPO, registry, whitelist: g.whitelist });
+  const engine = new Engine({
+    repoDir: REPO, registry, whitelist: g.whitelist, customRules: EXTENDED_RULES,
+  });
   try {
     const rd = engine.redact(g.text, sid, 'golden');
     const checks = [

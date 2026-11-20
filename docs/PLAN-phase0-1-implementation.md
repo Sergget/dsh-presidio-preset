@@ -18,6 +18,13 @@ Python/Node 双端 parity 是硬约束。
 - [x] 0.2'（补做）预设实体清单扩到 20 类：`plugins/dsh-pii-guard-terms/lib/index.js` 的
       `PRESET_DEFAULT_ENTITY_TYPES` 与 `.agent-presets/presidio-pii/preset.json` 同步加入
       AGE / BIRTH_DATE / GENDER / ETHNICITY / EDUCATION / IM_ACCOUNT / EMPLOYEE_ID。
+- [x] 0.8（2026-11-20 补做）golden 扩到 57 条并接入扩展规则库：
+      `tools/gen_equivalence_golden.py` 传 `custom_rules=rule_libraries/extended-fields.json`，
+      新增 F-04/F-05/F-06/F-07 与 7 类字段正样本 + 4 条扩展负样本；
+      `tests/node/engine-equivalence.mjs` 同步传 `customRules`，双端加载同一份规则库才可比。
+- [x] 0.9（2026-11-20 补做）门禁 #1 从「PERSON 硬编码」升级为逐类断言：
+      `tools/release_gate.py` 新增 `ENTITY_PROBES`（20 类探针）+ `_check_entity_coverage()`，
+      按 preset 声明的类型逐类要求命中，**声明了却没命中或没配探针一律 FAIL**（差集不允许静默通过）。
 
 ### Phase 1 —— 最小 PII 预设与四件套（全部完成）
 
@@ -41,7 +48,7 @@ Python/Node 双端 parity 是硬约束。
 | --- | --- | --- |
 | Python 全量 | `python -m pytest tests/ -q` | 279 passed, 8 subtests passed |
 | 字段专项 | `python -m pytest tests/test_extended_fields.py` | 19 passed |
-| Node 引擎等价 | `node tests/node/engine-equivalence.mjs` | 41/41 ALL_GOLDEN_MATCH |
+| Node 引擎等价 | `node tests/node/engine-equivalence.mjs` | 57/57 ALL_GOLDEN_MATCH（含 7 类扩展字段） |
 | Node 协议 | `node tests/node/protocol-smoke.mjs` | 3/3 ALL_PROTOCOL_CHECKS_PASS |
 | Node 字段 parity | `node tests/node/extended-fields.mjs` | NODE_EXTENDED_FIELDS_PASS 12 |
 | 四件套回归 | `node tests/node/guard-fs-tools.mjs` | 33 passed, 0 failed |
@@ -50,6 +57,8 @@ Python/Node 双端 parity 是硬约束。
 | guard 显示烟测 | `node tests/js/plugin_display.mjs <guard>` | ALL PASS（含 S3 config.repo） |
 | 门禁①②③ | `node tools/check_phase1_gates.mjs` | GATE_PHASE1_DONE，exit 0 |
 | 门禁第 13 项 | `python tools/release_gate.py --only 13` | PASS |
+| 门禁第 1 项（逐类） | `python tools/release_gate.py --only 1` | PASS，逐类探针 20/20 命中 |
+| 门禁第 1 项反证 | 伪造 `NONEXISTENT_TYPE` / 新增无探针类型 | 两种都 FAIL（缺口不会被放过） |
 | 预设插件解析 | `node tools/verify_preset_plugins.mjs` | PASS（home 18 / bundle 18） |
 | 安装自检 | `pwsh tools/verify_install.ps1` | PASS=4 FAIL=0 SKIP=1，exit 0 |
 
@@ -59,6 +68,14 @@ Python/Node 双端 parity 是硬约束。
    这比旧实现准确，但属策略收紧；依赖「短主体公司也算机构」的旧用例需要改断言。
 2. **spill 治理只做到工具侧**：宿主 spill-local / spill-policy / session-persistence
    预设管不到，四件套靠自限长 + 不回 locator 兜住；超长内容仍会被截断。
-3. **Phase 0.8 / 0.9 未做**（golden 扩 7 字段样本、门禁 #1 扩新字段断言）：
-   属 PLAN-pii-research-implementation 的 Phase 0 余项，不在本轮批准范围，已留在该计划中。
-4. **mcp-211dec4477（playwright）保留**：由设置卡片管理开关，不在本仓库 patch 内覆盖。
+3. **mcp-211dec4477（playwright）保留**：由设置卡片管理开关，不在本仓库 patch 内覆盖。
+
+## 门禁口径修正（2026-11-20 复审，均属"门禁本身有缺陷"而非放水）
+
+| 项 | 旧口径问题 | 新口径 |
+| --- | --- | --- |
+| #5 格式覆盖面 | 断言字面量 `svc.on("error"`，B1 竞态修复把 `svc` 改成句柄对象后合法代码被判回归 | 改为正则断言 `\.on\(\s*["']error["']`（**行为**：子进程挂 error 处理），不再锁变量名 |
+| #7 密钥扫描 | 扫描器自带的假凭据夹具（`tests/test_release_gate_rules.py`）永久污染历史与工作树判定 | 按路径豁免并**每次披露条数** `selftest_fixtures_exempted=N`，其余路径零容忍；命中的是 AWS 官方文档示例 key（`AKIA` 前缀 + `EXAMPLE` 后缀）一类假值 |
+| #10 源码可溯源 | `commit == HEAD` 使「提交清单」这个动作本身导致失配，形成死循环 | 允许清单绑定提交是 HEAD 的**祖先**；绑定强度由 `source_tree_sha256`（覆盖 wheel 打包源码）承担 |
+
+反证：三项修正后重新跑全量门禁，PASS 10 → PASS 12（#10 需按发布流程重建产物后 PASS，见 RELEASE-RUNBOOK）。

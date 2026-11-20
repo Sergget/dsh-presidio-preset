@@ -17,6 +17,8 @@ segmentation._HAS_JIEBA = False
 
 from presidio_pii.engine import PresidioPIIEngine
 
+EXTENDED_RULES = REPO / "rule_libraries" / "extended-fields.json"
+
 SAMPLES = [
     # 数字类
     ("手机13800138000联系", None),
@@ -43,14 +45,31 @@ SAMPLES = [
     ("马晓东、宋佳参加评审", None),
     ("2名学生荣获宋庆龄奖学金", None),
     ("再查李明, 手机 13800138000", None),
+    ("员工范志强，男，45岁。", None),                 # F-04 弱上下文
     # 地点 / 机构 / 职务
     ("张伟是中国银行北京市朝阳区支行行长", None),
     ("合肥市政协信息化平台项目", None),
     ("参照安徽省数据资源管理局的做法", None),
     ("他担任总经理一职", None),
     ("地址：成都市武侯区天府大道北段1700号", None),
+    ("地址：成都市武侯区天府大道北段1700号3单元501室", None),  # F-05 多段房号
     ("重庆市渝北区经纪有限公司", None),
-    # 精度闸门（应零命中）
+    ("他是公司总经理", None),                        # F-06 代词左边界
+    ("籍贯：山东济南", None),                        # F-07 籍贯省+市
+    # Phase 0 扩展字段（kind:regex 规则库，context_hint 驱动）
+    ("年龄 45 周岁，身体健康", None),
+    ("现年 38 岁，从事财务工作", None),
+    ("出生日期：1990-03-07", None),
+    ("他生于 1985年12月，现居合肥", None),
+    ("性别：男，民族：汉族", None),
+    ("学历：硕士研究生", None),
+    ("微信：zhangsan2024 常联系", None),
+    ("工号：EMP-000123 请登记", None),
+    # 扩展字段负样本（必须零命中）
+    ("20 岁以上人员需参加体检", None),
+    ("3 岁以下儿童免票", None),
+    ("本次植树树龄 15 岁", None),
+    ("该政策适用于全市 8300 余名职工", None),
     ("内容要求如下", None),
     ("本项目分为第一部", None),
     ("所有部门都要参与", None),
@@ -71,10 +90,11 @@ SAMPLES = [
 
 def main():
     golden = []
+    rules = str(EXTENDED_RULES) if EXTENDED_RULES.is_file() else None
     with tempfile.TemporaryDirectory() as td:
         for i, (text, whitelist) in enumerate(SAMPLES, 1):
             db = str(Path(td) / f"g{i}.db")
-            eng = PresidioPIIEngine(db_path=db, whitelist=whitelist)
+            eng = PresidioPIIEngine(db_path=db, whitelist=whitelist, custom_rules=rules)
             sid = eng.registry.create_session()
             rd = eng.redact(text, sid, "golden")
             golden.append({
@@ -91,7 +111,8 @@ def main():
     out = REPO / "tests" / "node" / "golden.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(golden, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"GOLDEN_WRITTEN {out} count={len(golden)}")
+    print(f"GOLDEN_WRITTEN {out} count={len(golden)} custom_rules={rules}")
+
 
 
 if __name__ == "__main__":
