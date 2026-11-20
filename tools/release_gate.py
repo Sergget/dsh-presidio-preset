@@ -821,6 +821,44 @@ def check_external_corpus() -> dict:
     return {"status": PASS if ok else FAIL, "evidence": ev, "reason": reason}
 
 
+def check_phase1() -> dict:
+    """Phase 1 门禁①②③：最小工具面（禁 PTC / 禁 FAIL_OPEN / spill 占位符形态）。
+
+    除调用 tools/check_phase1_gates.mjs 外，额外做静态断言：预设不得再挂
+    tool-bash / tool-pwsh / tool-fs / tool-fs-search / tool-todo / tool-web，
+    且必须挂 dsh-pii-guard-fs 四件套。
+    """
+    rc, out = run(["node", "tools/check_phase1_gates.mjs"], cwd=REPO, timeout=120)
+    gate_ok = rc == 0 and "GATE_PHASE1_DONE" in out
+
+    presets = [REPO / ".agent-presets/presidio-pii/agent.cordis.yml",
+               REPO / ".agent-presets/presidio-pii/bundle/cordis.patch.yml"]
+    # 用带引号的完整包名匹配，避免 dsh-tool-fs 命中 dsh-tool-fs-search 的误报
+    forbidden = ["dsh-tool-executor-ptc", "'@deepseek-ai/dsh-tool-bash'",
+                 "'@deepseek-ai/dsh-tool-pwsh'", "'@deepseek-ai/dsh-tool-fs'",
+                 "'@deepseek-ai/dsh-tool-fs-search'", "'@deepseek-ai/dsh-tool-todo'",
+                 "'@deepseek-ai/dsh-tool-web'"]
+    offenders = []
+    has_fs = []
+    for path in presets:
+        if not path.is_file():
+            offenders.append(f"{path.name}:missing")
+            continue
+        text = path.read_text(encoding="utf-8")
+        for token in forbidden:
+            if token in text:
+                offenders.append(f"{path.name}:{token}")
+        if "dsh-pii-guard-fs" in text:
+            has_fs.append(path.name)
+    ok = gate_ok and not offenders and len(has_fs) == len(presets)
+    ev = (f"gate_script={'ok' if gate_ok else 'fail'} "
+          f"presets_with_guard_fs={len(has_fs)}/{len(presets)} "
+          f"forbidden_hits={len(offenders)}")
+    reason = ("最小工具面成立：四件套挂载、shell/直读面已移除、三条门禁 PASS"
+              if ok else f"违规项: {(offenders or [tail(out, 1)])[:3]}")
+    return {"status": PASS if ok else FAIL, "evidence": ev, "reason": reason}
+
+
 CHECKS = [
     ("1 读取侧拦截(引擎层)", check_read),
     ("2 DSH 进程内 E2E", check_e2e),
@@ -834,6 +872,7 @@ CHECKS = [
     ("10 源码可溯源", check_provenance),
     ("11 仓库不落 PII", check_repo_pii),
     ("12 外部语料(网络下载)", check_external_corpus),
+    ("13 Phase1 最小工具面(门禁①②③)", check_phase1),
 ]
 
 

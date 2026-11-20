@@ -98,18 +98,9 @@
               maxBytes: 65536
           - id: time-context
             name: '@deepseek-ai/dsh-time-context'
-          - id: tool-bash
-            name: '@deepseek-ai/dsh-tool-bash'
-            disabled: !!js process.platform === 'win32'
-          - id: tool-pwsh
-            name: '@deepseek-ai/dsh-tool-pwsh'
-            disabled: !!js process.platform !== 'win32'
-          - id: tool-fs
-            name: '@deepseek-ai/dsh-tool-fs'
-          - id: tool-fs-search
-            name: '@deepseek-ai/dsh-tool-fs-search'
-            config:
-              sampleOverCapGlobResults: false
+          # Phase 1（D1）：不挂 tool-bash / tool-pwsh / tool-fs / tool-fs-search，
+          # 模型的文件与 shell 面收窄到 dsh-pii-guard-fs 四件套，
+          # 直读通道 4 → 1（仅剩经过脱敏的 read_redacted）。
           - id: tool-jobs
             name: '@deepseek-ai/dsh-tool-jobs'
           - id: tool-schedule
@@ -119,6 +110,10 @@
             config:
               # 部署态（插件位于 DSH_HOME）无法从模块路径推断仓库根，必须显式给出。
               # install.ps1 安装时把 __REPO__ 替换为真实仓库根；env PII_GUARD_REPO 可覆盖。
+              repo: '__REPO__'
+          - id: pii-guard-fs
+            name: 'file:///__DSH_HOME__/plugins/dsh-pii-guard-fs/lib/index.mjs'
+            config:
               repo: '__REPO__'
           - id: skill-filesystem
             name: '@deepseek-ai/dsh-skill-filesystem'
@@ -232,15 +227,8 @@
                 name: '@deepseek-ai/dsh-tool-workflow'
           - id: tool-ask-user
             name: '@deepseek-ai/dsh-tool-ask-user'
-          - id: tool-todo
-            name: '@deepseek-ai/dsh-tool-todo'
-            config:
-              allowParallelInProgress: true
-          - id: tool-web
-            name: '@deepseek-ai/dsh-tool-web'
-            config:
-              fetch: true
-              searchTimeoutMs: 60000
+          # Phase 1（D1）：不挂 tool-todo / tool-web —— 最小工具面只保留
+          # 四件套 + 子代理/工作流/ask_user/present。
           - id: present
             name: '@deepseek-ai/dsh-tool-present'
           - id: tool-plugin-manager

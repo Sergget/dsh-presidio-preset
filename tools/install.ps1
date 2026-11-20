@@ -1,4 +1,4 @@
-﻿# install.ps1 — presidio-pii 预设参数化安装脚本（FIX-1 / FIX-6 配置源部分）
+# install.ps1 — presidio-pii 预设参数化安装脚本（FIX-1 / FIX-6 配置源部分）
 #
 # 用法（在仓库根或任意目录）：
 #   powershell -ExecutionPolicy Bypass -File <repo>\tools\install.ps1 `
@@ -105,6 +105,19 @@ if ($DryRun.IsPresent) {
     New-Item -ItemType Directory -Path $dstDir -Force | Out-Null
     Copy-Item -Path $src -Destination $dst -Force
     Log "已安装 guard 插件: $dst"
+}
+
+# --- 3b. 复制四件套插件（Phase 1 / D1 最小工具面）-------------------------
+$srcFs = Join-Path $Repo 'plugins/dsh-pii-guard-fs/lib/index.mjs'
+$dstFs = Join-Path $DshHome 'plugins/dsh-pii-guard-fs/lib/index.mjs'
+if (-not (Test-Path $srcFs)) { Fail "找不到四件套插件源码: $srcFs" }
+if ($DryRun.IsPresent) {
+    Log "[DRY] 将复制: $srcFs -> $dstFs"
+} else {
+    $dstFsDir = Split-Path -Parent $dstFs
+    New-Item -ItemType Directory -Path $dstFsDir -Force | Out-Null
+    Copy-Item -Path $srcFs -Destination $dstFs -Force
+    Log "已安装四件套插件: $dstFs"
 }
 
 # --- 4. 收尾提示 ------------------------------------------------------------
