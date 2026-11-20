@@ -119,6 +119,10 @@
   - md/txt/csv/json：读取侧拦截生效（csv 实测 PERSON/ID/PHONE/ORG 计数 > 0）
   - docx/xlsx/pptx 经 read：原始字节 UTF-8 解码后占位符 0、PII 明文 0 —— 因 zip DEFLATE 压缩，内容本身不可用，**不构成泄露**，但用户也读不到内容；此类文件应走 CLI 产物级 redact/restore
   - rg 对 docx 内证件号默认 `exit=1`，加 `--text` 仍 `exit=1`
+- [x] **判定口径说明（2026-11-20 复审修正）**：第 5 项原先断言字面量 `svc.on("error"`，而 B1 竞态修复
+  把 `svc` 改成「服务实例句柄」对象后，真正挂 error 处理的是 `proc` —— 合法重构被判成回归。
+  现改为正则断言 `\.on\(\s*["']error["']`：锁**行为**（子进程挂了 error 处理），不锁变量名。
+  同理，门禁断言列表里凡是「实现细节字符串」都要能经受重构，否则门禁会变成阻碍改进的枷锁。
 - [x] **shell（pwsh 前台 + 后台任务 + isError）输出**：PASS —— 插件自 2026-11-11 起改为**默认全工具扫描**（`SKIP_TOOLS = {job_kill, read_image}` 黑名单），`read`/`grep`/`pwsh`/`job_*`/MCP/PTC/web 等文本结果一律脱敏；`job_output`/`job_list` 单块超过 256,000 字节先截断再脱敏并追加截断标记；非文本输出（NUL>1% 或不可打印>30%）不脱敏并追加标记行；shell/后台任务的 `isError` 文本同样脱敏（其它工具的 `isError` 维持透传）；下游按 `value` 替换 canonical 结果时**阻断**而非静默放行；逃生开关 `PII_GUARD_SHELL=off`（对 pwsh 与后台任务生效）/ `PII_GUARD_SHELL_ALLOWLIST=<regex>`（仅 pwsh），命中写 `shell_bypass` 审计，不含明文。
   - **写入侧（2026-11-11 新增）**：`agent/created` 里用公开 scoped shadow（`agent.ctx.tools.register({...original, execute})` + `agent.ctx.effect`）包住 `write`/`edit`/`apply_patch`/`str_replace_editor`，把模型参数里的 `⟦PII:...⟧` **还原回原文**再交给原实现，避免占位符写坏用户文件；`read_image` 用 `agent.ctx.tools.restrict({deny:["read_image"]})` 在 PII 预设内隐藏；`agent/pre-step` 兜底扫描只告警、不改写消息。
   - **fail-closed（2026-11-11 新增）**：Python 服务 spawn 失败/退出/超时/坏响应 → 返回 `{kind:"block"}` 阻断工具结果，绝不放行明文；仅 `PII_GUARD_FAIL_OPEN=1`（排障用，默认关闭）回退到旧的降级透传。
@@ -145,14 +149,18 @@
 ## 7. 密钥扫描
 
 - [x] **判定标准**：工作树与全部可达历史中无真实凭据；命中项须逐条定性，真凭据需轮换。
-- **当前状态**：PASS（0 个真凭据，无需轮换）
+  **扫描器自测夹具**（`tests/test_release_gate_rules.py` 里为验证正则而放的假值）按路径豁免，
+  但每次都在 evidence 里披露豁免条数，不允许静默丢弃。
+- **当前状态**：PASS（2026-11-20 复审后：`commits=51`、`diff_lines=30148`、命中 0；
+  `selftest_fixtures_exempted=10`）
 - **证据**：
   - 工具：PATH 无 gitleaks → 自写 `git log -p --all --no-color` + 12 类正则（AWS key、PRIVATE KEY、GitHub token/PAT、Slack、Google API key、`sk-`、JWT、secret/key/token/password 赋值、URI 带凭据、bcrypt、PEM 证书）
-  - 结果：`commits_scanned=31`、`diff_lines=12038`、`hits=1`
-  - 唯一命中：commit `fc3a70a5`，类型别名 `Token = Tuple[...]`（词性标注类型），**误报**，非凭据
-  - 工作树：仅 `pyproject.toml` 修改（构建配置），无敏感文件
+  - 历史扫描按 diff 头 `+++ b/<path>` 归属文件，命中项带路径（`aws_key@history:path:AKI***LE`），便于逐条定性
+  - 复审记录：本轮修门禁时我在 `docs/PLAN-phase0-1-implementation.md` 里引用了 AWS 文档示例 key
+    作为「假值示例」，被自己的门禁抓出（2 处）。已改写措辞并重写这两笔**未推送**提交，
+    历史里不再含该字面量——门禁确实会咬人，包括咬写门禁的人。
 - **覆盖与漏检说明**：
-  - 覆盖：所有分支/tag 可达提交的文本 diff + 提交消息
+  - 覆盖：所有分支/tag 可达提交的文本 diff + 提交消息 + 全部 tracked 文本文件
   - 漏检可能：二进制/图片 diff 内嵌内容、reflog 与不可达对象（dangling）、submodule 内部历史、上述 12 类之外的私有云格式与高熵随机串（无固定前缀）
   - 结论：作为"无已知凭据泄露"的证据足够；如需更强保证，需在联网环境装 gitleaks 并加 `gitleaks git --log-opts="--all"`
 
@@ -177,14 +185,21 @@
 
 ## 10. 源码可溯源（origin 是否含 HEAD）
 
-- [x] **判定标准**：发布包对应的提交在远端可达（`origin` 含 HEAD），**或**发布物改为已构建 wheel 并记录哈希。
-- **当前状态**：PASS（按路径 A：远端可达）。2026-11-10 已提交并推送，`origin/master` 含 HEAD（`69021c9`），ahead 0；清单仍保留 wheel 哈希与源码树摘要作为产物级佐证。
+- [x] **判定标准**：发布包对应的提交在远端可达（`origin` 含 HEAD），**或**发布物改为已构建 wheel 并记录哈希；
+  「清单绑定的提交」必须等于 HEAD **或是 HEAD 的祖先**，且源码树摘要与当前源码一致。
+- **为什么允许祖先**：清单本身是被 git 跟踪的文件，要求 `commit == HEAD` 会让「提交清单」这个动作
+  自己把判定打回 False，形成「提交→失配→改清单→再失配」的死循环。绑定强度由
+  `source.source_tree_sha256`（覆盖 wheel 实际打包的 `presidio_pii/**` + `pyproject.toml`）承担，
+  提交只证明谱系；源码一改摘要即失配，仍能挡住「清单绑定旧代码」。
+- **当前状态**：PASS（2026-11-20，`artifact_only` 路径）。分支 `refactor/node-pii-engine`
+  领先 `origin/master` 8 个提交，尚未合并；清单已重绑到当前源码。
 - **证据**：`release/presidio-pii-dsh-0.1.0.json`
-  - `artifact.sha256` = `75050E227825CF06C5C7146D2A484F103EFA9D2DB954957FABDF3D7E66B0361A`，bytes=57,350，与 `dist/` 中的 wheel 逐字节核对一致
-  - `source.source_tree_sha256` = `f0446a21…7bec7`，由 `presidio_pii/**` + `pyproject.toml` 的路径/内容哈希排序后再哈希得到；门禁会按当前源码重算比对，源码一改即 FAIL，避免“清单绑定旧代码”
-  - `source.commit` = HEAD（ea22be4），`provenance_mode = artifact-only`，并显式记录 `working_tree_dirty = true`
+  - `artifact.sha256` = `791CF2810DDC58E5DC43B84FAA83F1A69D757918D7EA11BA4BBFEFD72B99EF71`，bytes=68,184，与 `release/` 内 wheel 逐字节一致
+  - `source.source_tree_sha256` = `1429357d…`，由 `presidio_pii/**` + `pyproject.toml` 的路径/内容哈希排序后再哈希得到
+  - `source.commit` = `a0b195e`（HEAD `6b9e154` 的祖先，清单提交紧随其后）
 - **验证**：`python tools/release_gate.py --only 10` → PASS；把清单里的 sha256 改成假值后同一检查立即 FAIL（`sha_ok=False`），恢复后重新 PASS
-- **残余说明**：wheel 产自未提交工作树，清单已记录该事实；远端可达路径 A 仍是更强的溯源形式，后续推送后门禁优先按 A 判定
+- **残余说明**：因分支未合并，当前走的是产物级溯源（B 路径）；合并进 `master` 并推送后
+  会自动回到 A 路径（HEAD 在远端可达），届时需重跑门禁确认。
 
 ## 11. 仓库不落真实 PII / 映射库
 
