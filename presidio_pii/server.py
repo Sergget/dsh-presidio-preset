@@ -1,6 +1,6 @@
 """PII 脱敏常驻服务（stdio JSON 行协议）。
 
-供 dsh-pii-guard Node 插件作为子进程调用：启动一次，词表加载一次，
+供 dsh-presidio-pii Node 插件作为子进程调用：启动一次，词表加载一次，
 之后每次请求走 stdin/stdout 的 JSON 行协议，单次 <100ms。
 
 协议（每行一个 JSON）:

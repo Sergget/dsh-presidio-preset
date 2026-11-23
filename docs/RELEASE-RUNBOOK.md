@@ -113,7 +113,7 @@ python -m venv "$env:TEMP\pii_release"
 9. `job_list` 查看任务：命令/描述回显里的人名与电话已变占位符。
 
 通过判据：上述 9 步均符合，且 `.pii_presidio_store/hook_log.jsonl` 新增对应 `before_llm` 记录（`n_replaced > 0`，日志不含明文）。
-插件文件位置：`<DSH_HOME>/plugins/dsh-pii-guard/lib/index.js`；仓库内已有版本化副本 `plugins/dsh-pii-guard/lib/index.js`（门禁 #5 逐字节比对，drift 即 FAIL）。修改流程：先改仓库副本 → 用 `Copy-Item plugins\dsh-pii-guard\lib\index.js <DSH_HOME>/plugins/dsh-pii-guard/lib/index.js -Force` 同步 → 完全重启 DSH → 跑 `tools/release_gate.py --only 5`。
+插件文件位置：`<DSH_HOME>/profiles/desktop/node_modules/dsh-presidio-pii/lib/guard.js`；仓库内已有版本化副本 `plugins/dsh-presidio-pii/lib/guard.js`（门禁 #5 逐字节比对，drift 即 FAIL）。修改流程：先改仓库副本 → 用 `Copy-Item plugins\dsh-presidio-pii\lib\index.js <DSH_HOME>/profiles/desktop/node_modules/dsh-presidio-pii/lib/guard.js -Force` 同步 → 完全重启 DSH → 跑 `tools/release_gate.py --only 5`。
 
 ## 5. #10 溯源决策（当前口径：路径 B 产物级；推送后转 A）
 
@@ -131,8 +131,8 @@ python -m venv "$env:TEMP\pii_release"
 
 ### 6.1 立即回退（若上线后发现阻断问题）
 
-1. 回退插件：仓库副本 `plugins/dsh-pii-guard/lib/index.js` 已纳入版本控制，直接用它覆盖
-   `<DSH_HOME>/plugins/dsh-pii-guard/lib/index.js`，完全重启 DSH，再跑 `tools/release_gate.py --only 5`
+1. 回退插件：仓库副本 `plugins/dsh-presidio-pii/lib/guard.js` 已纳入版本控制，直接用它覆盖
+   `<DSH_HOME>/profiles/desktop/node_modules/dsh-presidio-pii/lib/guard.js`，完全重启 DSH，再跑 `tools/release_gate.py --only 5`
    （仓库副本即发布基线，不再依赖手工 `.bak`）。
 2. 回退 Python 包：在干净 venv 里卸载当前版本，改用已推送提交 `69021c9` 的历史产物（哈希 `77154909…20CF8`、58,831 B，旧口径仅作回退基线；当前清单产物为 HEAD `a31dac6` 的 `8C99677F…6BE6E`）。该历史版本不含 11-11 之后的修复，回退前评估功能损失。
 3. 回退数据（可选）：把 `.pii_presidio_store/` 下的映射库替换为发布前快照（发布前应先做快照）。

@@ -6,6 +6,9 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const RECOGNIZER_PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // --------------------------------------------------------------------------- #
 // Result
@@ -97,9 +100,15 @@ function loadLines(file) {
     .filter((ln) => ln && !ln.startsWith("#"));
 }
 
-/** 读 <repoDir>/presidio_pii/assets/{surnames,admin_areas,titles}.txt */
+/** 读词库 assets/{surnames,admin_areas,titles}.txt（兼容统一包与仓库目录布局） */
 export function loadAssets(repoDir) {
-  const dir = path.join(repoDir, "presidio_pii", "assets");
+  const candidates = [
+    repoDir ? path.join(repoDir, "assets") : null,
+    repoDir ? path.join(repoDir, "presidio_pii", "assets") : null,
+    path.join(RECOGNIZER_PKG_ROOT, "assets"),
+    path.join(RECOGNIZER_PKG_ROOT, "presidio_pii", "assets"),
+  ].filter(Boolean);
+  const dir = candidates.find((d) => fs.existsSync(path.join(d, "surnames.txt"))) || candidates[0];
   return {
     surnames: loadLines(path.join(dir, "surnames.txt")),
     adminAreas: loadLines(path.join(dir, "admin_areas.txt")),

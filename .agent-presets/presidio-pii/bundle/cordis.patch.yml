@@ -1,38 +1,14 @@
-# presidio-pii agent preset 的 bundle patch（dsh 0.2.x 声明行正路）。
-#
-# 关键：plugins 列表必须与**当前 dsh 版本的 preset-standard 权威定义**对齐
-# （`%APPDATA%\npm\node_modules\@deepseek-ai\dsh-web-app\presets\standard.patch.yml`），
-# 只替换 persona 的 config.prefix 并追加 pii-guard / customSkillDirs 两项。
-# 2026-11-10 修复「加载失败」：dsh 0.2.1-rc.5 -> 0.2.2-rc.1 时
-#   @deepseek-ai/dsh-tool-subagent-control/list-agents 子路径导出被删除（并入主包），
-#   残留该子行会让 registry 激活时导入失败 -> record.broken -> GUI「加载失败」；
-#   同时 modelSelectionSettings 旧键改为 modelSelection / modelDiscovery。
-# 升级 dsh 后必须重跑 `node tools/verify_preset_plugins.mjs` 校验清单漂移。
-#
-# 安装方式（二选一，二选一即可，勿叠加）：
-#   A. plugin_manager 工具，action: install_bundle，target 指向本 bundle 目录；
-#   B. 把下方 insert 块追加到 **home 层** $DSH_HOME/cordis.patch.yml（对所有 profile 生效），
-#      然后**重启 DSH**（0.2.x 无 patch 热加载）。
-# 注意：home 层与 profile 层若同时 insert 同 id 行，会触发 Duplicate agent preset；
-#       本机当前唯一权威声明在 home 层，desktop profile 层已删除重复块。
-# 验证：node tools/verify_preset_plugins.mjs 全绿；
-#       dsh --profile web --dump-config 应只含一行 preset-presidio-pii；
-#       GUI 重启后「PII 防护模式」不再显示「加载失败」。
-#
-# 【可安装模板 / FIX-1】本文件是占位符模板，含 __REPO__ / __DSH_HOME__ 两个占位符，
-# 本体不含任何作者机器绝对路径，可被重复安装（模板永不改写）。
-#   安装：pwsh tools/install.ps1 -Repo <仓库根> -DshHome <DSH_HOME>
-#   脚本读本模板 → 替换占位符 → 生成 cordis.patch.yml.installed（与模板同目录），
-#   plugin_manager install_bundle 实际安装的是 bundle 目录，配置源仍指向 ./cordis.patch.yml。
-#   如需让安装产物长期生效，可把 .installed 内容覆盖到你 own 的 home/profile patch（不在本脚本职责内）。
-#   安装时务必保证 __DSH_HOME__/plugins/dsh-pii-guard/lib/index.js 已由 install.ps1 复制到位。
+# Note: The standalone preset bundle has been merged with the former guard,
+# guard-fs and guard-terms halves into the unified bundle at:
+#   plugins/dsh-presidio-pii/
+# Keep this file valid and free of hardcoded paths for backward reference.
 - insert:
     - id: preset-presidio-pii
       name: '@deepseek-ai/dsh-agent-preset'
       config:
         id: presidio-pii
         name: PII 防护模式
-        description: PII 防护模式：dsh-pii-guard 在工具结果进入上下文前强制脱敏；CLI redact/restore 仅用于 office 二进制与显式交付还原。
+        description: PII 防护模式：由一体化插件 dsh-presidio-pii 在工具结果与安全文件通道进入上下文前强制脱敏，展示侧自动还原。
         order: 3
         plugins:
           - id: persona
@@ -41,53 +17,13 @@
               prefix: >-
                 You are a coding agent powered by the {{model}} model, running with the
                 PII-Protection preset. PII redaction is enforced by the runtime, not by
-                your discipline: the dsh-pii-guard plugin redacts every tool result
-                before it is written to the session log and before it enters your
-                context. Placeholders in the user-visible answer are restored on the
-                display side. You never need to run a redaction step before reading a
-                file, and you must not duplicate one.
+                your discipline: dsh-presidio-pii redacts tool results before they enter
+                your context and restores placeholders on the display side.
 
-                RUNTIME GUARD (already active, do not work around it):
-                - Use read / grep / pwsh / job_output / job_list normally. Their text
-                  results arrive as ⟦PII:TYPE:NNNN⟧ placeholders. Work with those
-                  placeholders as-is; never try to recover the originals.
-                - write / edit are wrapped: placeholders in your arguments are
-                  restored to the original text inside the host before the file is
-                  written. Do not pre-restore them yourself.
-                - read_image is hidden in this preset (image text cannot be redacted).
-                - If a tool result is blocked with a [pii-guard] message, the redaction
-                  service is unavailable (fail-closed). Report it; do not retry with a
-                  different tool to bypass it.
-                - Known gaps: user-pasted text in the input box, base64 / UTF-16 /
-                  image text, and the original arguments of a tool/call in the session
-                  log are outside the result guard. Never paste raw PII into a prompt,
-                  tool call, or external service.
-
-                CLI redact / restore are SUPPLEMENTARY. Use them only for:
-                (1) office binaries (docx / xlsx / pptx — read returns archive bytes);
-                (2) an explicit user request for a losslessly restored plaintext file;
-                (3) offline batch processing; (4) verifying redact→restore is lossless.
-                For those cases run `python -m presidio_pii.cli redact <file>` /
-                `restore <file>` and keep artifacts under
-                <repo-root>/.pii_presidio_store/. Do NOT run the CLI for
-                ordinary reading, and do not add a restore/verification step to every
-                answer.
-
-                Windows host notes: exactly ONE shell tool `pwsh` is mounted (never
-                call `bash`). Python 3.13 is on PATH; the presidio-pii package must be
-                pip-installed once (see the presidio-pii skill). CLI commands use
-                PowerShell syntax and Windows paths.
-
-                Sandboxed execution rules (only when you actually use the CLI):
-                1. Do NOT rely on the current working directory. Pass ABSOLUTE paths
-                   under the repository root (the checkout containing this preset).
-                2. Create output directories with `pwsh` (New-Item -ItemType Directory)
-                   BEFORE running the CLI or verify_check.py.
-                3. Keep every artifact under <repo-root>/.pii_presidio_store/.
-
-                When the user asks about redaction capabilities, entities, custom
-                rules, or whitelists, load the `presidio-pii` skill for the exact CLI
-                reference instead of answering from memory.
+                RUNTIME GUARD & SAFE FS SURFACE (active in this preset):
+                - File access is narrowed to `read_redacted`, `write_raw`, `restore`, and `ls`.
+                - `read_image` is hidden in this preset.
+                - If a tool result is blocked with `[pii-guard]`, report it and do not bypass.
 
                 Global Response Requirements:
                 1. Always provide a summary and conclusion at the end of each response.
@@ -98,28 +34,23 @@
               maxBytes: 65536
           - id: time-context
             name: '@deepseek-ai/dsh-time-context'
-          # Phase 1（D1）：不挂 tool-bash / tool-pwsh / tool-fs / tool-fs-search，
-          # 模型的文件与 shell 面收窄到 dsh-pii-guard-fs 四件套，
-          # 直读通道 4 → 1（仅剩经过脱敏的 read_redacted）。
           - id: tool-jobs
             name: '@deepseek-ai/dsh-tool-jobs'
           - id: tool-schedule
             name: '@deepseek-ai/dsh-tool-schedule'
           - id: pii-guard
-            name: 'file:///__DSH_HOME__/plugins/dsh-pii-guard/lib/index.js'
+            name: 'dsh-presidio-pii/guard'
             config:
-              # 部署态（插件位于 DSH_HOME）无法从模块路径推断仓库根，必须显式给出。
-              # install.ps1 安装时把 __REPO__ 替换为真实仓库根；env PII_GUARD_REPO 可覆盖。
-              repo: '__REPO__'
+              dataDir: !!js dshHomePath('data', 'presidio-pii')
           - id: pii-guard-fs
-            name: 'file:///__DSH_HOME__/plugins/dsh-pii-guard-fs/lib/index.mjs'
+            name: 'dsh-presidio-pii/fs'
             config:
-              repo: '__REPO__'
+              dataDir: !!js dshHomePath('data', 'presidio-pii')
           - id: skill-filesystem
             name: '@deepseek-ai/dsh-skill-filesystem'
             config:
               customSkillDirs:
-                - '__REPO__/.agent-presets/presidio-pii/skills'
+                - !!js process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('dsh-presidio-pii/package.json')), 'skills')
           - id: tool-skill
             name: '@deepseek-ai/dsh-tool-skill'
           - id: command-goal
@@ -136,52 +67,7 @@
                 name: '@deepseek-ai/dsh-plan-mode'
                 config:
                   section: >
-                    You are in plan mode. Stay in plan mode until the user approves
-                    your plan through exit_plan_mode or switches the session mode.
-                    Imperative language to implement changes means plan the
-                    implementation, not execute it. A user's conversational
-                    agreement — including an answer confirming something you asked —
-                    approves nothing and does not end plan mode; fold the confirmed
-                    decision into the plan and submit it through exit_plan_mode.
-
-                    Explore first. Use non-mutating reads, searches, static
-                    analysis, and checks to ground the plan in the actual
-                    repository. Do not edit or write files, change configuration,
-                    run formatters or code generation that rewrites tracked files,
-                    commit, or otherwise carry out the plan. Prefer existing
-                    functions and patterns over new machinery.
-
-                    The tool catalog stays the same across modes for request-cache
-                    stability. These plan-mode rules override any later tool
-                    description or guidance that suggests using mutation tools;
-                    those tools remain listed to keep the tool catalog unchanged. Do
-                    not use todo_write to track this planning phase: it tracks
-                    implementation after an approved plan, while the plan itself
-                    belongs in exit_plan_mode.
-
-                    Resolve discoverable facts by inspection. Use ask_user_question
-                    only for user-owned choices or material ambiguity that
-                    inspection cannot answer. Do not ask the user where code lives
-                    or how current behavior works when you can find out.
-
-                    Make the plan decision-complete: state the goal and success
-                    criteria; group implementation changes by subsystem; identify
-                    public API, schema, and data-flow changes; cover edge cases,
-                    failure modes, tests, acceptance criteria, and explicit
-                    assumptions. Keep it concise enough to review but detailed
-                    enough that another engineer can implement it without making
-                    design decisions.
-
-                    When ready, call exit_plan_mode with the complete plan markdown,
-                    starting with a # title. Make exit_plan_mode the only and final
-                    tool call in that assistant response: it presents the plan for
-                    approval, and implementation begins only in a later step after
-                    approval. Do not paste the final plan as a plain reply or ask
-                    "should I proceed?" through prose or ask_user_question. If
-                    review rejects it, incorporate the feedback and present again.
-                    If the review channel is unavailable or aborted, stay in plan
-                    mode and ask the user to switch modes manually; do not proceed
-                    with implementation.
+                    You are in plan mode. Stay in plan mode until the user approves your plan through exit_plan_mode or switches the session mode.
           - id: compaction
             name: cordis:group
             group: true
@@ -207,6 +93,8 @@
             config:
               - id: tool-subagent-control
                 name: '@deepseek-ai/dsh-tool-subagent-control'
+                config:
+                  interrupt: false
               - id: tool-subagent
                 name: '@deepseek-ai/dsh-tool-subagent'
                 config:
@@ -227,8 +115,6 @@
                 name: '@deepseek-ai/dsh-tool-workflow'
           - id: tool-ask-user
             name: '@deepseek-ai/dsh-tool-ask-user'
-          # Phase 1（D1）：不挂 tool-todo / tool-web —— 最小工具面只保留
-          # 四件套 + 子代理/工作流/ask_user/present。
           - id: present
             name: '@deepseek-ai/dsh-tool-present'
           - id: tool-plugin-manager

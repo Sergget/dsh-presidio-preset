@@ -11,7 +11,7 @@
 
 ### 根因一：guard 加载期误报「无法确定仓库根」
 
-`plugins/dsh-pii-guard/lib/index.js:96` 在**模块加载期**就调用 `resolveRepo(null)`——
+`plugins/dsh-presidio-pii/lib/guard.js:96` 在**模块加载期**就调用 `resolveRepo(null)`——
 此时还没有 bundle config，部署态（插件在 DSH_HOME）`DEFAULT_REPO` 推断必为空，
 于是每次启动都刷一条假告警。`apply()` 拿到 `config.repo` 后才是真值。
 
@@ -61,7 +61,7 @@ golden / 门禁 #1 全绿，但生产报「未知实体类型」。因为**测�
 
 ## 部署同步
 
-`E:/Code/dsh_home/plugins/dsh-pii-guard/lib/index.js` 已同步
+`<DSH_HOME>/profiles/desktop/node_modules/dsh-presidio-pii/lib/guard.js` 已同步
 （sha256 与仓库一致：AD147B46…07F31）。
 
 ## 验证证据（全绿）
@@ -80,7 +80,7 @@ golden / 门禁 #1 全绿，但生产报「未知实体类型」。因为**测�
 
 ## 涉改文件
 
-- `plugins/dsh-pii-guard/lib/index.js`（加载期静默解析）
+- `plugins/dsh-presidio-pii/lib/guard.js`（加载期静默解析）
 - `presidio_pii/hooks.py`、`node_pii/hooks.mjs`（内置规则库合并）
 - `presidio_pii/engine.py`、`node_pii/engine.mjs`（_known_entity_types 并 PRIO；
   wants_raw 坐标不再被平移）

@@ -307,10 +307,14 @@ def DISPLAY_MODE_SUPPORTED(src: str) -> bool:
 # FIX-1: 已安装插件路径不再写死作者路径，改由 DSH_HOME 环境变量推断。
 # 未配置时留空：下方安装的 sha 比对会走 installed_sync=missing -> SKIP 分支，
 # 仓库副本本身仍独立校验，不降低门禁判定口径。
+# 统一 bundle 形态：仓库副本 plugins/dsh-presidio-pii/lib/guard.js，安装态由
+# dsh 插件管理器以 link 方式挂到 <DSH_HOME>/profiles/<profile>/node_modules/dsh-presidio-pii。
 _DSH_HOME = os.environ.get("DSH_HOME", "").strip()
-PLUGIN = (Path(_DSH_HOME) / "plugins" / "dsh-pii-guard" / "lib" / "index.js"
-          if _DSH_HOME else Path(""))
-PLUGIN_SRC = REPO / "plugins" / "dsh-pii-guard" / "lib" / "index.js"
+_DSH_PROFILE = os.environ.get("DSH_PROFILE", "").strip() or "desktop"
+_BUNDLE_NAME = "dsh-presidio-pii"
+PLUGIN = (Path(_DSH_HOME) / "profiles" / _DSH_PROFILE / "node_modules"
+          / _BUNDLE_NAME / "lib" / "guard.js" if _DSH_HOME else Path(""))
+PLUGIN_SRC = REPO / "plugins" / _BUNDLE_NAME / "lib" / "guard.js"
 
 
 def _sha_file(p: Path) -> str:
@@ -350,36 +354,44 @@ def check_formats() -> dict:
                                  "GUARD_SETTINGS_FILE", "readSettings", "ENV_FALLBACK",
                                  "coerceDisplayMode", "displayMode()", "isFailOpen()",
                                  "isShellDisabled()", "getAllowlist()",
+                                 # v0.6：内存有界 + allowlist ReDoS 双保险 + 路径解析去重
+                                 "cacheSet", "PH_CACHE_LIMIT", "DISPLAY_BUF_LIMIT",
+                                 'from "./paths.mjs"', 'from "./regex-safety.mjs"',
+                                 "hasNestedQuantifier(",
                                  ) if pat not in src]
     # 子进程 error 处理按行为断言，不锁变量名：B1 竞态修复后 svc 变成句柄对象，
     # 真正挂 error 处理的是 proc，锁字面量会把合法重构误判成回归。
     if not re.search(r"\.on\(\s*[\"']error[\"']", src):
         missing.append("<child process error handler>")
 
-    # v0.4：用户自定义屏蔽词 UI（dsh-pii-guard-terms 设置页）
-    terms_src = REPO / "plugins" / "dsh-pii-guard-terms"
-    terms_files = ["package.json", "cordis.patch.yml", "lib/index.js",
+    # v0.4：用户自定义屏蔽词 UI（统一 bundle 的 terms/client 半身）
+    terms_src = REPO / "plugins" / _BUNDLE_NAME
+    terms_files = ["package.json", "cordis.patch.yml", "lib/terms.js",
+                   "lib/guard.js", "lib/fs.mjs", "lib/paths.mjs", "lib/regex-safety.mjs",
                    "client.js", "locale/en.json", "locale/zh.json", "icon.svg"]
     terms_missing = [f for f in terms_files if not (terms_src / f).is_file()]
     terms_ev = ""
     if not terms_missing:
-        host_src = (terms_src / "lib" / "index.js").read_text(encoding="utf-8")
+        host_src = (terms_src / "lib" / "terms.js").read_text(encoding="utf-8")
         client_src = (terms_src / "client.js").read_text(encoding="utf-8")
         host_missing = [pat for pat in (
+            "export const name = 'dsh-presidio-pii-terms'",
             "USER_TERM", "user-term-placeholder", "(?!)",
             "/api/dsh-pii-guard/terms", "/api/dsh-pii-guard/terms/save",
-            "isLoopbackRequest", "hasSameOriginProof", "guard(",
+            "isLoopbackRequest", "hasSameOriginProof", "function guard(req, res, method)",
             "normalizeTerms", "writeTerms", "readTerms", "escapeLiteral",
             "ctx.inject(['webServer']",
-            "dsh-pii-guard-terms",
             # v0.5：P0/P1 设置 API + S1 精确会话 cookie + S2 路径漂移告警
             "/api/dsh-pii-guard/settings", "/api/dsh-pii-guard/settings/save",
             "sessionCookieName", "hasSessionCookie", "dsh-auth-",
             "readSettings", "normalizeSettings", "writeSettings", "warnIfPathDrift",
+            # 统一 bundle：ReDoS 拦截抽到共享模块，host 半体必须引用它
+            "from './regex-safety.mjs'", "hasNestedQuantifier",
         ) if pat not in host_src]
         client_missing = [pat for pat in (
+            "const MODULE_ID = 'dsh-presidio-pii'",
             "settings.section", "settings.section.icon", "pii-guard-terms",
-            "dsh-pii-guard-terms", "api/dsh-pii-guard/terms",
+            "api/dsh-pii-guard/terms",
             "__ModuleLoader__.load", "return exports",
             # v0.5：前端设置分节（屏蔽词+防护配置合并进单一菜单 PiiGuardSection）
             "api/dsh-pii-guard/settings", "SettingsSection", "PiiGuardSection",
@@ -415,7 +427,8 @@ def check_formats() -> dict:
                             cwd=REPO, timeout=180)
         rc_disp, out_disp = run([node, "tests/js/plugin_display.mjs", str(PLUGIN_SRC)],
                                 cwd=REPO, timeout=120)
-        rc_terms, out_terms = run([node, "tests/js/plugin_terms.mjs"],
+        rc_terms, out_terms = run([node, "tests/js/plugin_terms.mjs",
+                                   str(REPO / "plugins" / _BUNDLE_NAME / "lib" / "terms.js")],
                                   cwd=REPO, timeout=120)
         js_ok = rc_js == 0 and rc_disp == 0 and rc_terms == 0
         js_ev = (f"js_smoke={'pass' if rc_js == 0 else 'fail'}"
@@ -545,7 +558,7 @@ def check_deps() -> dict:
 
     tool = shutil.which("pip-audit")
     if not tool:
-        uvx = shutil.which("uvx") or r"C:\Users\sergg\.local\bin\uvx.exe"
+        uvx = shutil.which("uvx") or str(Path.home() / ".local" / "bin" / ("uvx.exe" if sys.platform == "win32" else "uvx"))
         audit_cmd = [uvx, "pip-audit"] if Path(uvx).exists() else None
     else:
         audit_cmd = [tool]
@@ -967,7 +980,7 @@ def check_phase1() -> dict:
 
     除调用 tools/check_phase1_gates.mjs 外，额外做静态断言：预设不得再挂
     tool-bash / tool-pwsh / tool-fs / tool-fs-search / tool-todo / tool-web，
-    且必须挂 dsh-pii-guard-fs 四件套。
+    且必须挂 dsh-presidio-pii/fs 四件套。
     """
     rc, out = run(["node", "tools/check_phase1_gates.mjs"], cwd=REPO, timeout=120)
     gate_ok = rc == 0 and "GATE_PHASE1_DONE" in out
@@ -989,7 +1002,7 @@ def check_phase1() -> dict:
         for token in forbidden:
             if token in text:
                 offenders.append(f"{path.name}:{token}")
-        if "dsh-pii-guard-fs" in text:
+        if f"{_BUNDLE_NAME}/fs" in text:
             has_fs.append(path.name)
     ok = gate_ok and not offenders and len(has_fs) == len(presets)
     ev = (f"gate_script={'ok' if gate_ok else 'fail'} "

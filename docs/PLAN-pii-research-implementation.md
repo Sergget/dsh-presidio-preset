@@ -24,7 +24,7 @@
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
 | 0.1 | 新增 7 个字段规则库（`kind: regex`，每字段一个 JSON 文件）：`AGE` / `BIRTH_DATE` / `GENDER` / `ETHNICITY` / `EDUCATION` / `IM_ACCOUNT` / `EMPLOYEE_ID`；全部 `context_hint` 标签驱动（参照 §5.6 已跑通的 age-ctx 样例），**不写裸单位词**（"20岁以上/3岁以下"负样本必须零命中） | 仓库内 `rule_libraries/`（D9：内置清单落仓库） | 双端加载无 warn；正样本命中、负样本零命中 |
-| 0.2 | `preset.json` 扩 `entity_types` 至 20 类（13 + 7）；同步门禁与 UI 保存侧白名单 | `.agent-presets/presidio-pii/preset.json`、`plugins/dsh-pii-guard-terms/lib/index.js:326-332` | preset 保存回路正常；plugin_terms 全绿 |
+| 0.2 | `preset.json` 扩 `entity_types` 至 20 类（13 + 7）；同步门禁与 UI 保存侧白名单 | `.agent-presets/presidio-pii/preset.json`、`plugins/dsh-presidio-pii/lib/terms.js:326-332` | preset 保存回路正常；plugin_terms 全绿 |
 | 0.3 | 修 F-04 姓名弱上下文（"员工范志强，男，45岁。"→[]，左上下文职务词+姓名） | Python `chinese_recognizers.py` + Node `recognizers.mjs`（双端） | 该句命中 PERSON；既有精度闸门不回归 |
 | 0.4 | 修 F-05 住址尾号（门牌正则补"室/号/单元+楼层房号"） | 同上双端 | "88号3单元501"完整命中 LOCATION |
 | 0.5 | 修 F-06 机构左边界（"他是公司总经理"→ORGANIZATION 他是公司） | Python `_trim_org_start`/`_ORG_PREFIX_WORDS`（`chinese_recognizers.py:802,869`）+ Node 对应实现 | "他是"不再被吞进机构名 |
@@ -41,7 +41,7 @@
 
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
-| 1.1 | 自建四件套工具 `read_redacted` / `write_raw` / `restore` / `ls`（内部自限长防 spill；内部 catch fs 错误抹 `displayPath`） | 新插件 `plugins/dsh-pii-guard-fs/`（复用 guard 的 server 通道与 scoped shadow 范式 `plugins/dsh-pii-guard/lib/index.js:618-659`） | 超长结果不落原文；错误信息无路径泄漏 |
+| 1.1 | 自建四件套工具 `read_redacted` / `write_raw` / `restore` / `ls`（内部自限长防 spill；内部 catch fs 错误抹 `displayPath`） | 新插件 `plugins/dsh-presidio-pii/`（复用 guard 的 server 通道与 scoped shadow 范式 `plugins/dsh-presidio-pii/lib/guard.js:618-659`） | 超长结果不落原文；错误信息无路径泄漏 |
 | 1.2 | 预设 `plugins` 数组不写 `tool-fs-search` / `tool-bash` / `tool-pwsh` / `tool-web` / `tool-todo`；`tool-fs` 五开关全关 | `.agent-presets/` | 工具面枚举断言（研究报告 §3.4 表） |
 | 1.3 | 门禁三条：①预设不得出现 `dsh-tool-executor-ptc`（R: 结论#8 定时炸弹）②不得出现 `PII_GUARD_FAIL_OPEN=1` ③构造超长结果后断言 spill 目录里是占位符 | `release_gate.py` | 三断言入库，人为破坏可 FAIL |
 | 1.4 | home 层删 `mcp-codebuddy` / `mcp-playwright`（T-27） | DSH home 配置（**跨仓库**，需单独确认） | 预设内 MCP 面收窄 |

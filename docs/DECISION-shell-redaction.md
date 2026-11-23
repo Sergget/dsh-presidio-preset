@@ -37,7 +37,7 @@ DSH `pwsh` 的模型可见结果形态（`@deepseek-ai/dsh-tool-pwsh` 与 `@deep
 | 后台/超时会转成 job，输出改由 `job_output` 返回 | `renderPwshPromoted`、`@deepseek-ai/dsh-tool-jobs` |
 | `job_list` 会回显 **命令文本与描述** | `dsh-tool-jobs/lib/index.js`（`job` 结构含 command/description） |
 
-插件现状（2026-11-11 修订）：改为**默认全工具结果扫描** —— 黑名单 `SKIP_TOOLS = {job_kill, read_image}`，`read`/`grep`/`pwsh`/`bash`/`job_*` 以及 MCP/PTC/web 等所有工具的文本型结果一律脱敏；`read_image` 另在 PII 预设内用 `agent.ctx.tools.restrict` 隐藏。源码在仓库内 `plugins/dsh-pii-guard/lib/index.js`、安装于 `E:/Code/dsh_home/plugins/dsh-pii-guard/lib/index.js`（门禁 #5 校验两边一致）。写入侧由 `agent/created` scoped shadow 把 `write`/`edit` 参数里的占位符还原回原文后再落盘。
+插件现状（2026-11-11 修订）：改为**默认全工具结果扫描** —— 黑名单 `SKIP_TOOLS = {job_kill, read_image}`，`read`/`grep`/`pwsh`/`bash`/`job_*` 以及 MCP/PTC/web 等所有工具的文本型结果一律脱敏；`read_image` 另在 PII 预设内用 `agent.ctx.tools.restrict` 隐藏。源码在仓库内 `plugins/dsh-presidio-pii/lib/guard.js`、安装于 `<DSH_HOME>/profiles/desktop/node_modules/dsh-presidio-pii/lib/guard.js`（门禁 #5 校验两边一致）。写入侧由 `agent/created` scoped shadow 把 `write`/`edit` 参数里的占位符还原回原文后再落盘。
 
 ## 2. 拦截范围（建议）
 

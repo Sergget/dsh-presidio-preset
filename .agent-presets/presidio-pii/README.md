@@ -8,7 +8,7 @@
 |------|------|-----------|---------|
 | **bundle 声明行 preset**（推荐，唯一正路） | `bundle/package.json` + `bundle/cordis.patch.yml` | dsh 0.2.x（本机实测 0.2.1-rc.5） | ✅ 已装并验证 |
 | 目录式预设（已废弃） | `agent.cordis.yml` + `preset.yml` + `skills/` | 仅旧版 dsh | ⚠️ dsh 0.2.x 不再读取该目录 |
-| 钩子契约入口（存档） | `preset.json` + `hook.py` | 能挂载 Python 钩子的 DSH 运行时 | ⚠️ 接缝仍不提供、该形态不可加载；但同等能力已由 Cordis 插件 `dsh-pii-guard` 实现，不再是唯一方案 |
+| 钩子契约入口（存档） | `preset.json` + `hook.py` | 能挂载 Python 钩子的 DSH 运行时 | ⚠️ 接缝仍不提供、该形态不可加载；但同等能力已由 Cordis 插件 `dsh-presidio-pii` 实现，不再是唯一方案 |
 
 > **要跑测试？直接看 [`START-HERE.md`](START-HERE.md)** —— 里面有可直接粘贴到新会话的启动提示词，
 > 以及每条约束的实测依据。
@@ -17,7 +17,7 @@
 
 ### 工作原理
 
-主路径是**运行时结果侧强制脱敏**：`dsh-pii-guard` Cordis 插件挂在 `tools/post-execute`
+主路径是**运行时结果侧强制脱敏**：`dsh-presidio-pii` Cordis 插件挂在 `tools/post-execute`
 waterfall 上，默认对所有工具的文本结果在写入 session log 与进入上下文之前强制脱敏，
 模型无感、不可跳过。助手回复里的占位符由 `agent/assistant-stream` 在显示侧还原。
 
@@ -28,7 +28,7 @@ waterfall 上，默认对所有工具的文本结果在写入 session log 与进
 agent 正常调用 read / grep / pwsh / job_output / job_list 读取文本
       │
       ▼
-tools/post-execute waterfall：dsh-pii-guard 对工具文本结果强制脱敏
+tools/post-execute waterfall：dsh-presidio-pii 对工具文本结果强制脱敏
 （PII → ⟦PII:TYPE:0001⟧），在写入 session log 与进入上下文之前完成
       │
       ▼
@@ -50,7 +50,7 @@ CLI `redact` / `restore` 是**补充路径**，只用于四类场景：office �
 与透明拦截方案（`preset.json` 钩子）的关系：旧方案想在 **LLM 请求侧**改写 prompt/响应，
 dsh 0.2.x 的 LLM 请求深度冻结（扩展只读），没有该挂载点。现行方案改在**工具结果侧**
 强制脱敏——是运行时强制改写而非 agent 工作流里的显式步骤，不依赖模型自律；
-同等能力已由 Cordis 插件实现（见下文「钩子契约入口」与 `plugins/dsh-pii-guard/`）。
+同等能力已由 Cordis 插件实现（见下文「钩子契约入口」与 `plugins/dsh-presidio-pii/`）。
 
 ### 部署
 
@@ -124,7 +124,7 @@ preset 被标记 `broken`，GUI 显示「加载失败」；`modelSelectionSettin
 LLM 请求深度冻结（监听器与适配器只读），且 preset 只接受 cordis 插件声明、不扫描
 `preset.json`，因此该形态在当前 dsh 上仍不可加载。但其目标能力（读取侧强制脱敏、
 助手回复显示侧还原）已由 Cordis 插件在 `tools/post-execute` / `agent/assistant-stream`
-接缝上实现，见仓库 `plugins/dsh-pii-guard/`；该插件是当前主路径，钩子形态不再是唯一方案。
+接缝上实现，见仓库 `plugins/dsh-presidio-pii/`；该插件是当前主路径，钩子形态不再是唯一方案。
 保留此文件作为钩子契约的规范定义，供支持 Python 钩子的运行时或未来 dsh 版本使用。
 
 ## 识别实体

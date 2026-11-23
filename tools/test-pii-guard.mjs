@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const GUARD = join(REPO, "plugins", "dsh-pii-guard", "lib", "index.js");
+const GUARD = join(REPO, "plugins", "dsh-presidio-pii", "lib", "guard.js");
 const { apply } = await import(pathToFileURL(GUARD).href);
 
 // 当前 guard 的脱敏监听器注册在 tools/post-execute，签名 (exec, result, next)。

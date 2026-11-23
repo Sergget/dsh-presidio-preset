@@ -1,29 +1,13 @@
-// Phase 1.1 四件套插件：read_redacted / write_raw / restore / ls
-//
-// 用途：presidio-pii 最小预设的**唯一**文件访问面。预设不再挂
-// tool-bash / tool-pwsh / tool-fs / tool-fs-search / tool-todo / tool-web，
-// 模型只能通过这里读（读到的是占位符）和写（写的是还原后的原文）。
-//
-// 设计约束（对应 docs/RESEARCH-pii-protection.md Phase 1 + D3）：
-//   1. 自限长：宿主 spill-local/spill-policy 预设管不到，工具自己截断，
-//      永不返回 spill locator，防止超长结果绕过脱敏落盘。
-//   2. D3 抹 displayPath：所有返回值/错误只保留 basename，绝不回传真实
-//      目录结构（否则模型能从路径里反推用户名、项目名等 PII）。
-//   3. 零 DSH 包依赖：只用 node 内置模块 + ctx 注入，与
-//      dsh-pii-guard / dsh-pii-guard-terms 的既有风格一致。
-//   4. redact/restore 可注入：默认走 node_pii 进程内引擎，测试用
-//      setRedact / setRestore 打桩。
-
+// Safe FS tool surface for dsh-presidio-pii: read_redacted / write_raw / restore / ls
 import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync } from 'node:fs';
-import { join, dirname, basename, resolve as resolvePath, isAbsolute } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { dirname, basename, resolve as resolvePath, isAbsolute } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { ensureDefaultPreset, resolveDataPaths } from './paths.mjs';
 
-// ── 限长常量（防 spill 触发）───────────────────────────────────────────────
 export const MAX_READ_CHARS = 200_000;
 export const MAX_WRITE_CHARS = 500_000;
 export const MAX_LS_ENTRIES = 500;
 
-// ── D3：抹除 displayPath ──────────────────────────────────────────────────
 export function sanitizePath(p) {
   if (typeof p !== 'string' || p.length === 0) return '<unknown>';
   return basename(p);
@@ -31,16 +15,13 @@ export function sanitizePath(p) {
 
 export function safeError(err, op) {
   const msg = err && typeof err.message === 'string' ? err.message : String(err);
-  // 错误消息里可能带绝对路径，统一抹成 basename 形态
   return { error: `${op} failed: ${stripDirs(msg)}`, displayPath: '<redacted>' };
 }
 
-/** 把错误文本里的路径片段压成 basename，避免目录结构泄漏。 */
 function stripDirs(text) {
   return text.replace(/([A-Za-z]:)?[\\/][^\s'"]*/g, (seg) => sanitizePath(seg));
 }
 
-// ── redact / restore 注入点 ───────────────────────────────────────────────
 let redactImpl = (text) => text;
 let restoreImpl = (text) => text;
 
@@ -69,7 +50,6 @@ function resolveTarget(ctx, args) {
   return resolvePath(cwd, raw);
 }
 
-// ── read_redacted ─────────────────────────────────────────────────────────
 export async function readRedacted(ctx, args) {
   let target;
   try {
@@ -97,7 +77,6 @@ export async function readRedacted(ctx, args) {
   }
 }
 
-// ── write_raw ─────────────────────────────────────────────────────────────
 export async function writeRaw(ctx, args) {
   let target;
   try {
@@ -129,7 +108,6 @@ export async function writeRaw(ctx, args) {
   }
 }
 
-// ── restore ───────────────────────────────────────────────────────────────
 export async function restoreText(ctx, args) {
   const text = args?.text ?? args?.content;
   if (typeof text !== 'string') {
@@ -146,7 +124,6 @@ export async function restoreText(ctx, args) {
   }
 }
 
-// ── ls ────────────────────────────────────────────────────────────────────
 export async function listDir(ctx, args) {
   let target;
   try {
@@ -161,7 +138,7 @@ export async function listDir(ctx, args) {
     }
     const entries = readdirSync(target, { withFileTypes: true });
     const totalEntries = entries.length;
-    let rows = entries.slice(0, MAX_LS_ENTRIES).map((e) => ({
+    const rows = entries.slice(0, MAX_LS_ENTRIES).map((e) => ({
       name: e.name,
       isDirectory: e.isDirectory(),
       isFile: e.isFile(),
@@ -178,9 +155,7 @@ export async function listDir(ctx, args) {
   }
 }
 
-// ── Cordis 插件表面 ───────────────────────────────────────────────────────
 export const name = 'pii-guard-fs';
-// 只依赖 tools 服务；不依赖 fs（自带 node:fs），不依赖 sandbox。
 export const inject = ['tools'];
 
 const byName = {
@@ -190,7 +165,6 @@ const byName = {
   ls: listDir,
 };
 
-/** 手搓 Cordis 工具定义：本部署的插件无法 import @deepseek-ai/dsh-tools。 */
 function toolDefinition(toolName, description, parameters) {
   return {
     name: toolName,
@@ -259,27 +233,19 @@ export const TOOL_DEFS = [
   ),
 ];
 
-// ── repo / preset 解析 ────────────────────────────────────────────────────
-export function inferRepo(explicit) {
-  if (typeof explicit === 'string' && explicit.length > 0) return explicit;
-  const fromEnv = process.env.PII_GUARD_REPO;
-  if (typeof fromEnv === 'string' && fromEnv.length > 0) return fromEnv;
-  try {
-    // <repo>/plugins/dsh-pii-guard-fs/lib/index.mjs → 上三级
-    return resolvePath(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-  } catch {
-    return undefined;
-  }
-}
-
-/** 进程内引擎单例（node_pii/hooks.mjs），与 guard 共用同一 preset/db。 */
 let enginePromise;
-async function engineFor(repo, presetPath) {
+async function engineFor(paths) {
   if (enginePromise !== undefined) return enginePromise;
   enginePromise = (async () => {
-    if (repo === undefined) throw new Error('cannot locate repository root: set config.repo or PII_GUARD_REPO');
-    const mod = await import(pathToFileURL(join(repo, 'node_pii', 'hooks.mjs')).href);
-    return mod.getEngine({ repoDir: repo, presetPath });
+    const mod = await import(pathToFileURL(paths.hooksFile).href);
+    const engine = mod.getEngine({
+      repoDir: paths.repo || paths.pkgRoot,
+      dataDir: paths.dataDir,
+      dbPath: paths.dbFile,
+      presetPath: paths.presetFile,
+    });
+    const sid = mod.sessionId('pii-guard-' + process.pid);
+    return { engine, sid };
   })();
   return enginePromise;
 }
@@ -288,20 +254,19 @@ export function resetEngine() {
 }
 
 export async function apply(ctx, config = {}) {
-  const repo = inferRepo(config?.repo);
-  const presetPath = config?.preset;
+  const paths = resolveDataPaths(config);
+  ensureDefaultPreset(paths.presetFile, paths.mode);
   try {
-    const engine = await engineFor(repo, presetPath);
+    const { engine, sid } = await engineFor(paths);
     setRedact(async (text) => {
-      const r = await engine.redact(text);
+      const r = await engine.redact(text, sid, 'svc');
       return r?.redacted ?? r?.text ?? '';
     });
     setRestore(async (text) => {
-      const r = await engine.restore(text);
+      const r = await engine.restore(text, sid, 'svc');
       return r?.text ?? r?.restored ?? '';
     });
   } catch (err) {
-    // fail-closed：拿不到引擎时绝不直通原文，让工具直接报错
     setRedact(async () => {
       throw new Error(`PII engine unavailable: ${err?.message ?? String(err)}`);
     });
@@ -312,7 +277,6 @@ export async function apply(ctx, config = {}) {
   for (const def of TOOL_DEFS) ctx.tools.register(def);
 }
 
-/** 测试用：拿到 4 个裸函数（不经过 Cordis）。 */
 export function createGuardFsTools({ redact, restore } = {}) {
   if (redact) setRedact(redact);
   if (restore) setRestore(restore);

@@ -1,19 +1,11 @@
 /**
- * Browser half of dsh-pii-guard-terms.
+ * Browser half of dsh-presidio-pii.
  *
- * Registers a settings page (`settings.section`) where the user can add, remove
- * and save the terms that must be redacted before prompts leave the harness.
- * The page talks to the Host half over two JSON routes:
- *
- *   GET  /api/dsh-pii-guard/terms        -> list terms
- *   POST /api/dsh-pii-guard/terms/save   -> replace the term list
- *   GET  /api/dsh-pii-guard/settings     -> read guard runtime settings (P0/P1)
- *   POST /api/dsh-pii-guard/settings/save -> write guard runtime settings
- *
- * The host matches routes by pathname only, so the URLs are absolute.
+ * Registers a settings page (`settings.section`) where the user can manage
+ * custom blocklist terms, entity types, whitelist path, and runtime guard settings.
  */
 (function bootstrap() {
-  const MODULE_ID = 'dsh-pii-guard-terms';
+  const MODULE_ID = 'dsh-presidio-pii';
   const NS = 'settings.piiGuardTerms';
   const API_LIST = '/api/dsh-pii-guard/terms';
   const API_SAVE = '/api/dsh-pii-guard/terms/save';
@@ -68,8 +60,8 @@
     'preset.allOn': '全选',
     'preset.allOff': '全不选',
     'preset.whitelistLabel': '白名单文件路径',
-    'preset.whitelistHint': '每行一个词，命中的词不脱敏。留空表示不使用白名单；相对路径需以 ./ 或 ../ 开头。',
-    'preset.whitelistPlaceholder': '例如：./.pii_presidio_store/whitelist.txt',
+    'preset.whitelistHint': '每行一个词，命中的词不脱敏。留空表示不使用白名单；相对路径相对 PII 数据目录解析（需以 ./ 或 ../ 开头）。',
+    'preset.whitelistPlaceholder': '例如：./whitelist.txt',
     'preset.save': '保存实体配置',
     'preset.saved': '已保存，下一次调用即生效',
   };
@@ -119,8 +111,8 @@
     'preset.allOn': 'Select all',
     'preset.allOff': 'Clear all',
     'preset.whitelistLabel': 'Whitelist file path',
-    'preset.whitelistHint': 'One term per line; matches stay unredacted. Leave empty for no whitelist. Relative paths must start with ./ or ../.',
-    'preset.whitelistPlaceholder': 'e.g. ./.pii_presidio_store/whitelist.txt',
+    'preset.whitelistHint': 'One term per line; matches stay unredacted. Leave empty for no whitelist. Relative paths resolve against the PII data directory (must start with ./ or ../).',
+    'preset.whitelistPlaceholder': 'e.g. ./whitelist.txt',
     'preset.save': 'Save entity config',
     'preset.saved': 'Saved — effective on the next call',
   };
@@ -191,9 +183,9 @@
 
   function ensureStyle() {
     if (typeof document === 'undefined') return;
-    if (document.getElementById('dsh-pii-guard-terms-style')) return;
+    if (document.getElementById('dsh-presidio-pii-style')) return;
     const style = document.createElement('style');
-    style.id = 'dsh-pii-guard-terms-style';
+    style.id = 'dsh-presidio-pii-style';
     style.textContent = CSS;
     document.head.appendChild(style);
   }
@@ -216,8 +208,6 @@
       let t = fallbackT;
 
       function installI18n(ctx) {
-        // Dynamic inject on purpose: a static `inject: ['locale']` would keep
-        // this page from mounting on hosts without the locale service.
         ctx.inject(['locale'], (i18nCtx) => {
           const locale = i18nCtx.locale;
           const disposeZh = locale.register(NS, 'zh', I18N_ZH);
@@ -539,7 +529,6 @@
             }, error) : null));
       }
 
-      // 实体类型勾选 + 白名单路径：写 preset.json，Python 引擎按 mtime 热读。
       function PresetSection() {
         const [types, setTypes] = useState([]);
         const [known, setKnown] = useState([]);
@@ -649,7 +638,6 @@
             }, error) : null));
       }
 
-      // 单一菜单：屏蔽词与防护配置在同一设置分区内分区渲染。
       function PiiGuardSection() {
         return h('div', { className: 'pii-guard' },
           h('div', { key: 'terms', className: 'pii-guard__panel' }, h(TermsSection)),

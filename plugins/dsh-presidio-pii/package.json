@@ -1,0 +1,50 @@
+{
+  "name": "dsh-presidio-pii",
+  "version": "0.2.0",
+  "description": "Unified Presidio PII protection bundle for DeepSeek Harness: PII preset, runtime redaction guard, safe FS tools, and settings UI.",
+  "type": "module",
+  "private": true,
+  "main": "./lib/terms.js",
+  "exports": {
+    ".": "./lib/terms.js",
+    "./terms": "./lib/terms.js",
+    "./guard": "./lib/guard.js",
+    "./fs": "./lib/fs.mjs",
+    "./client": "./client.js",
+    "./icon": "./icon.svg",
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/",
+    "node_pii/",
+    "assets/",
+    "rule_libraries/",
+    "defaults/",
+    "skills/",
+    "locale/",
+    "client.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "engines": {
+      "dsh": ">=0.2.2-rc.1 <0.4.0-0"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  }
+}

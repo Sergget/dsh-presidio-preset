@@ -1,0 +1,35 @@
+{
+  "name": "presidio-pii",
+  "version": "0.2.0",
+  "description": "Default configuration for the unified dsh-presidio-pii bundle (entity types, whitelist path, and custom rules path). Stored under the DSH data directory.",
+  "config": {
+    "db_path": "sessions.db",
+    "session_scope": "conversation",
+    "supported_extensions": [".txt", ".md", ".docx", ".xlsx", ".pptx"],
+    "whitelist_path": null,
+    "custom_rules_path": "user_terms_rules.json",
+    "rules_reload_interval": 1.0
+  },
+  "entity_types": [
+    "ID_NUMBER",
+    "PHONE_NUMBER",
+    "EMAIL_ADDRESS",
+    "CREDIT_CODE",
+    "BANK_CARD",
+    "PASSPORT",
+    "LICENSE_PLATE",
+    "IP_ADDRESS",
+    "MAC_ADDRESS",
+    "PERSON",
+    "LOCATION",
+    "ORGANIZATION",
+    "JOB_TITLE",
+    "AGE",
+    "BIRTH_DATE",
+    "GENDER",
+    "ETHNICITY",
+    "EDUCATION",
+    "IM_ACCOUNT",
+    "EMPLOYEE_ID"
+  ]
+}

@@ -24,8 +24,11 @@ $Repo    = (Resolve-Path $Repo).Path
 if ([string]::IsNullOrWhiteSpace($DshHome)) {
     Write-Host '[WARN] 未设置 $env:DSH_HOME，插件安装位同步将跳过；请用 -DshHome 指定。' -ForegroundColor Yellow
 }
-$Plugin  = Join-Path $Repo 'plugins\dsh-pii-guard\lib\index.js'
-$Install = if ([string]::IsNullOrWhiteSpace($DshHome)) { '' } else { Join-Path $DshHome 'plugins\dsh-pii-guard\lib\index.js' }
+$Plugin  = Join-Path $Repo 'plugins\dsh-presidio-pii'
+$Profile = if ([string]::IsNullOrWhiteSpace($env:DSH_PROFILE)) { 'desktop' } else { $env:DSH_PROFILE }
+$Install = if ([string]::IsNullOrWhiteSpace($DshHome)) { '' } else {
+    Join-Path $DshHome (Join-Path 'profiles' (Join-Path $Profile 'node_modules\dsh-presidio-pii'))
+}
 $Py      = 'python'
 $Epoch   = '1700000000'
 $Manifest = Join-Path $Repo 'release\presidio-pii-dsh-0.1.0.json'
@@ -33,22 +36,26 @@ $Manifest = Join-Path $Repo 'release\presidio-pii-dsh-0.1.0.json'
 function Get-Sha([string]$p) { (Get-FileHash $p -Algorithm SHA256).Hash }
 function Die([string]$msg) { Write-Host "[FAIL] $msg" -ForegroundColor Red; exit 1 }
 
-Write-Host '=== Step 1: 同步插件到安装位 ===' -ForegroundColor Cyan
-if (-not (Test-Path $Plugin)) { Die "插件副本不存在: $Plugin" }
+Write-Host '=== Step 1: 校验插件已由 dsh 插件管理器安装 ===' -ForegroundColor Cyan
+if (-not (Test-Path $Plugin)) { Die "统一插件目录不存在: $Plugin" }
 $syncOk = $false
 if ([string]::IsNullOrWhiteSpace($Install)) {
-    Write-Host '[WARN] 未指定 DshHome，跳过安装位同步（仓库副本仍会校验）。' -ForegroundColor Yellow
+    Write-Host '[WARN] 未设置 $env:DSH_HOME，跳过安装态校验。' -ForegroundColor Yellow
+} elseif (-not (Test-Path $Install)) {
+    Write-Host "[WARN] 插件尚未安装到 $Profile profile。先执行:" -ForegroundColor Yellow
+    Write-Host "       plugin_manager install_bundle target=$Plugin" -ForegroundColor Yellow
+    Write-Host '       （本脚本不再复制文件——统一 bundle 由 pnpm link 安装，就地热更新）' -ForegroundColor Yellow
 } else {
-try {
-    Copy-Item $Plugin $Install -Force
-    $shaRepo = Get-Sha $Plugin
-    $shaInst = Get-Sha $Install
-    if ($shaRepo -ne $shaInst) { throw "sha256 不一致 repo=$shaRepo inst=$shaInst" }
+    # 统一 bundle 是 link 安装：安装位与仓库副本是同一份文件，逐字节比对必然一致。
+    # 这里比对入口文件，防止有人手工替换成旧副本。
+    $entryRel = Join-Path 'lib' 'guard.js'
+    $shaRepo = Get-Sha (Join-Path $Plugin $entryRel)
+    $shaInst = Get-Sha (Join-Path $Install $entryRel)
+    if ($shaRepo -ne $shaInst) {
+        Die "安装位与仓库副本不一致（安装位被旧副本覆盖？）: repo=$shaRepo inst=$shaInst"
+    }
     $syncOk = $true
-    Write-Host "[OK] 插件已同步, sha256=$($shaRepo.Substring(0,16))..."
-} catch {
-    Write-Host "[WARN] 插件未同步（DSH 还在运行？稍后退出 DSH 再单独跑本脚本或手动 Copy-Item）: $($_.Exception.Message)" -ForegroundColor Yellow
-}
+    Write-Host "[OK] 安装态已生效（link 安装），$entryRel sha256=$($shaRepo.Substring(0,16))..."
 }
 
 Write-Host '=== Step 2: 重建 wheel（两次，校验可复现）===' -ForegroundColor Cyan

@@ -73,12 +73,12 @@
 
 # ── 文件与执行面（Phase 1 / D1）──────────────────────────────────────────────
 # 最小工具面：不挂 tool-bash / tool-pwsh / tool-fs / tool-fs-search，
-# 模型的文件访问收窄到 dsh-pii-guard-fs 四件套（read_redacted / write_raw /
+# 模型的文件访问收窄到 dsh-presidio-pii/fs 四件套（read_redacted / write_raw /
 # restore / ls），直读通道 4 → 1。
 - id: pii-guard-fs
-  name: 'file:///__DSH_HOME__/plugins/dsh-pii-guard-fs/lib/index.mjs'
+  name: 'dsh-presidio-pii/fs'
   config:
-    repo: '__REPO__'
+    dataDir: !!js dshHomePath('data', 'presidio-pii')
 
 # ── skills ──────────────────────────────────────────────────────────────────
 - id: skill-filesystem

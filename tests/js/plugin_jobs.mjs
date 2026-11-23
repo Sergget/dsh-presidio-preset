@@ -5,9 +5,6 @@
 // P3 isError 脱敏（shell/后台任务脱敏、非 shell 工具维持透传）、pwsh 非文本标记，
 // 以及 v0.2 新语义：默认全工具扫描、value 替换阻断、fail-closed 阻断、
 // 写入侧 wrapper 还原占位符、read_image 在 agent 作用域隐藏、pre-step 只告警。
-import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const pluginPath = process.argv[2];
@@ -16,18 +13,13 @@ if (!pluginPath) {
   process.exit(2);
 }
 
-// 插件源码是 ESM 语法但目录里没有 package.json type=module, 复制成 .mjs 再加载
-const tmp = mkdtempSync(join(tmpdir(), "pii-plugin-"));
-const copy = join(tmp, "plugin.mjs");
-copyFileSync(pluginPath, copy);
-
 // 默认 redact/restore 走 spawn；指向不存在的解释器用于验证 fail-closed 而非崩溃
 process.env.PII_GUARD_PY = "pii-guard-no-such-python-xyz";
 // 非法 allowlist 正则: 必须在加载时忽略，而不是抛错导致整个插件失效
 process.env.PII_GUARD_SHELL_ALLOWLIST = "(";
 
-const { apply } = await import(pathToFileURL(copy).href);
-rmSync(tmp, { recursive: true, force: true });
+// 插件目录自带 package.json type=module，可直接以真实路径加载，无需复制成 .mjs。
+const { apply } = await import(pathToFileURL(pluginPath).href);
 
 const handlers = {}; // event-name -> listener
 const mockCtx = {
@@ -420,6 +412,43 @@ async function runTool(tool, text, opts = {}) {
 
 function byteLength(s) {
   return Buffer.byteLength(s, "utf8");
+}
+
+// 22. S2 回归：guard 侧也必须拒绝嵌套量词的 allowlist（设置面板之外的第二道闸）。
+// 手改 guard-settings.json 或设 PII_GUARD_SHELL_ALLOWLIST 都会绕过 UI 校验，
+// 所以 guard 读到这里时必须自己再拦一次，否则 (a+)+ 这类模式会冻结 agent loop。
+{
+  const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const rejectRoot = mkdtempSync(join(tmpdir(), "pii-redos-"));
+  const rejectStore = join(rejectRoot, ".pii_presidio_store");
+  mkdirSync(rejectStore, { recursive: true });
+  writeFileSync(
+    join(rejectStore, "guard-settings.json"),
+    JSON.stringify({ shellAllowlist: "^(a+)+$", shellDisabled: false }),
+    "utf8",
+  );
+  const { apply: applyReject } = await import(pathToFileURL(pluginPath).href + `?redos=${Date.now()}`);
+  const rejectHandlers = {};
+  await applyReject(
+    { on: (evt, fn) => { rejectHandlers[evt] = fn; } },
+    {
+      repo: rejectRoot.replaceAll("\\", "/"),
+      redact: async (t) => ({ redacted: t.replaceAll("张伟", "⟦PII:PERSON:0001⟧"),
+                              map: { "⟦PII:PERSON:0001⟧": "张伟" } }),
+      restore: async (t) => t,
+    },
+  );
+  // 命中 allowlist 会直接放行（原文透传）；被拒则走脱敏链，人名被替换成占位符。
+  const res = await rejectHandlers["tools/post-execute"](
+    { name: "pwsh", args: { command: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }, agent: { ctx: {} } },
+    { content: [{ type: "text", text: "张伟" }] },
+    async () => ({ kind: "accept" }),
+  );
+  const out = (res.content ?? []).map((b) => b.text || "").join("\n");
+  check("嵌套量词 allowlist 被 guard 拒绝（不放行）", !out.includes("张伟") && out.includes("⟦PII:PERSON:"), out);
+  rmSync(rejectRoot, { recursive: true, force: true });
 }
 
 let failed = 0;

@@ -19,7 +19,7 @@ import {
   TOOL_DEFS,
   name,
   inject,
-} from '../../plugins/dsh-pii-guard-fs/lib/index.mjs';
+} from '../../plugins/dsh-presidio-pii/lib/fs.mjs';
 
 let passed = 0;
 let failed = 0;

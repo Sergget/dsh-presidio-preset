@@ -2,7 +2,7 @@
 // 不依赖 Python 服务: 直接注入 phMap（模拟 redact 响应下发的增量映射）。
 // 覆盖: 完整占位符替换、跨 chunk 分裂（扣尾补头）、end 兜底、无 PII 快路径、
 //       off 模式动态开关（通过 guard-settings.json 即时切换，无需重启）。
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -22,11 +22,10 @@ mkdirSync(storeDir, { recursive: true });
 const settingsFile = join(storeDir, "guard-settings.json");
 process.env.PII_GUARD_REPO = repoTmp.replaceAll("\\", "/");
 
-const tmp = mkdtempSync(join(tmpdir(), "pii-display-"));
-const copy = join(tmp, "plugin.mjs");
-copyFileSync(pluginPath, copy);
-const { apply } = await import(pathToFileURL(copy).href);
-rmSync(tmp, { recursive: true, force: true });
+// 直接以真实路径加载（插件目录自带 package.json type=module，无需复制成 .mjs）。
+// 用 ?v= 打破 ESM 缓存，保证"重新加载一份独立实例"的语义。
+const loadPlugin = (suffix) => import(pathToFileURL(pluginPath).href + (suffix ? `?${suffix}` : ""));
+const { apply } = await loadPlugin();
 
 // 进程重启后 phMap 为空，但映射仍保存在 SQLite；显示侧应通过同一 restore IPC
 // 按会话恢复，而不是把其他会话的映射混进来。用 mock 隔离验证接缝与缓存行为。
@@ -120,6 +119,24 @@ const PH = (n) => `\u27E6PII:PERSON:${String(n).padStart(4, "0")}\u27E7`;
   check("切回 full 即时恢复（扣尾）", !f2.chunk.text.includes("PII:PE"), `visible=${JSON.stringify(f2.chunk.text)}`);
 }
 
+// S1 回归：同一会话在 full 下扣了一半，切到 off 再切回 full，
+// 旧扣尾不得拼到新流开头（否则屏幕上会出现上一轮残留的半截占位符）。
+{
+  const agentSame = { session: { id: "s-same" } };
+  const f1 = chunk("第一轮 ⟦PII:PE", 0);
+  stream({ agent: agentSame, frame: f1 });
+  check("S1 前置：full 下扣住半截占位符", !f1.chunk.text.includes("PII:PE"), `visible=${JSON.stringify(f1.chunk.text)}`);
+
+  writeFileSync(settingsFile, JSON.stringify({ displayMode: "off" }), "utf8");
+  stream({ agent: agentSame, frame: chunk("off 期间文本", 1) });
+
+  writeFileSync(settingsFile, JSON.stringify({ displayMode: "full" }), "utf8");
+  const fNew = chunk("新一轮干净文本", 0);
+  stream({ agent: agentSame, frame: fNew });
+  check("S1 切回 full 后旧扣尾不残留", fNew.chunk.text === "新一轮干净文本", `visible=${JSON.stringify(fNew.chunk.text)}`);
+  check("S1 旧扣尾未拼进新流", !fNew.chunk.text.includes("PII:PE"), `visible=${JSON.stringify(fNew.chunk.text)}`);
+}
+
 // 进程重启恢复：phMap 为空时，通过 restore IPC 从 SQLite 按会话恢复并回填缓存。
 {
   const agentNew = { session: { id: "s-restart" } };
@@ -156,9 +173,7 @@ const PH = (n) => `\u27E6PII:PERSON:${String(n).padStart(4, "0")}\u27E7`;
   const settings2 = join(store2, "guard-settings.json");
   writeFileSync(settings2, JSON.stringify({ displayMode: "off" }), "utf8");
 
-  const copy2 = join(mkdtempSync(join(tmpdir(), "pii-s3-plugin-")), "plugin.mjs");
-  copyFileSync(pluginPath, copy2);
-  const { apply: apply2 } = await import(pathToFileURL(copy2).href + `?s3=${Date.now()}`);
+  const { apply: apply2 } = await loadPlugin(`s3=${Date.now()}`);
   const handlers2 = {};
   await apply2({ on: (evt, fn) => { handlers2[evt] = fn; } }, {
     repo: repo2.replaceAll("\\", "/"),

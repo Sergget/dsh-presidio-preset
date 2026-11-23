@@ -1,5 +1,5 @@
 // PII 脱敏常驻服务（stdio JSON 行协议）——逐字对齐 presidio_pii/server.py。
-// 供 dsh-pii-guard Node 插件作为子进程 spawn；启动一次，词表加载一次。
+// 供 dsh-presidio-pii 的 guard 半体作为子进程 spawn；启动一次，词表加载一次。
 import readline from 'node:readline';
 import { getEngine, beforeLlm, sessionId, maskValue } from './hooks.mjs';
 

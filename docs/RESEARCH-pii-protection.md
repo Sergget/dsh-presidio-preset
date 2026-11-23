@@ -38,7 +38,7 @@
 ### 0.2 十二条结论
 
 1. **「只暴露最少工具」✅ 可行**，两套官方机制：`tool-fs` 五开关（`dsh-tool-fs/lib/index.js:1967-1989`）+ `agent.ctx.tools.restrict`（`dsh-tools/lib/index.js:453-467`）。
-2. **「工具级钉死还原」✅ 可行，已有生产范式**：`plugins/dsh-pii-guard/lib/index.js:618-659` 的 scoped shadow（`agent/created` → 包住 `execute` → `restoreArgs`）。
+2. **「工具级钉死还原」✅ 可行，已有生产范式**：`plugins/dsh-presidio-pii/lib/guard.js:618-659` 的 scoped shadow（`agent/created` → 包住 `execute` → `restoreArgs`）。
 3. **「工具级钉死脱敏」⚠️ 只能钉住成功结果**：`post-execute` 不能替换 `isError`（`dsh-tools/lib/pipeline.js:687`、`:744-746`），而 fs 层 57 处错误里 39 处内嵌 `displayPath`。
 4. **「强语言约束禁止 bash 读文件」❌ 不可作为安全边界**：Windows 沙箱只限制写（`dsh-pwsh-sandbox/README.md:140`），本仓库 `docs/DECISION-shell-redaction.md:19`（§0 结论摘要第 2 条）已论证白名单不可靠。**正解是删掉 bash，不是约束 bash。**
 5. **「规则库化」能拆，但拆的不是识别器**——是「识别器 + 坐标契约 + 优先级契约 + 类型契约 + 依赖声明」五件东西。15 个内置识别器里只有 9 个能数据化，**人名/名册/地名/机构/职务这 5 个必须留 Python**。
@@ -69,8 +69,8 @@
 | 层 | 组件 | 作用 |
 |---|---|---|
 | 识别层 | `presidio_pii/chinese_recognizers.py` 15 个识别器 + `custom_rules.py` 自定义规则通道 | 把原文里的 PII 找出来，替换成 `⟦PII:<TYPE>:<SEQ>⟧` |
-| 通道层 | `plugins/dsh-pii-guard`（post-execute 脱敏 + 写入侧还原 + 显示侧还原） | 在工具结果进出模型上下文的边界上拦截 |
-| 配置层 | `plugins/dsh-pii-guard-terms`（4 条 HTTP 路由 + 2 块 UI 面板） | 用户可维护屏蔽词与 4 项设置 |
+| 通道层 | `plugins/dsh-presidio-pii`（post-execute 脱敏 + 写入侧还原 + 显示侧还原） | 在工具结果进出模型上下文的边界上拦截 |
+| 配置层 | `plugins/dsh-presidio-pii`（4 条 HTTP 路由 + 2 块 UI 面板） | 用户可维护屏蔽词与 4 项设置 |
 
 **已具备的规则数据模型**（这是规则库化的地基）：
 
@@ -161,7 +161,7 @@ if (url.protocol !== "http:" && url.protocol !== "https:") throw new WebError(..
 | R4 | **替换**：用户库可替换内置库 | 内置是 Python 类、用户是 JSON——替换语义取决于同构程度 |
 | R5 | **配置功能**：以上都通过配置 UI 完成 | UI 写入必须与引擎读取同源，且改完立刻生效 |
 
-**R5 是隐藏的杀手**：现有 UI 写 `user_terms_rules.json`，引擎读 `custom_rules_path`，两侧各有一份路径（`plugins/dsh-pii-guard-terms/lib/index.js:37`、`.agent-presets/presidio-pii/preset.json:21`、`tools/release_gate.py:319-320`），门禁用一条等式兜住（`release_gate.py:323`）。**加第四处配置源会让这条等式直接失真**（R-12）。
+**R5 是隐藏的杀手**：现有 UI 写 `user_terms_rules.json`，引擎读 `custom_rules_path`，两侧各有一份路径（`plugins/dsh-presidio-pii/lib/terms.js:37`、`.agent-presets/presidio-pii/preset.json:21`、`tools/release_gate.py:319-320`），门禁用一条等式兜住（`release_gate.py:323`）。**加第四处配置源会让这条等式直接失真**（R-12）。
 
 ### 2.2 内置识别器的可拆分性（决定方案上限）
 
@@ -195,7 +195,7 @@ if (url.protocol !== "http:" && url.protocol !== "https:") throw new WebError(..
 
 → **结论：库级开关的正确实现是「按 `entity_type` 过滤」，不是「按识别器实例过滤」。** 按实例过滤会在 `IP_ASSET`/`MAC_ADDRESS` 上做不到独立开关，在 `PERSON`/`ID_NUMBER`/`PHONE_NUMBER` 上则要人工维护「哪几个实例属于同一个库」的映射表。
 
-**这个机制已经存在，不需要新造。** `presidio_pii/engine.py:169-182` 的 `_filter_entity_types()` + `preset.json` 顶层 `entity_types` + 设置页勾选（`plugins/dsh-pii-guard-terms/client.js:64-67`、`lib/index.js:288-332`）。实测「按类型过滤」与「移除识别器实例」输出**逐字节相同**：
+**这个机制已经存在，不需要新造。** `presidio_pii/engine.py:169-182` 的 `_filter_entity_types()` + `preset.json` 顶层 `entity_types` + 设置页勾选（`plugins/dsh-presidio-pii/client.js:64-67`、`lib/index.js:288-332`）。实测「按类型过滤」与「移除识别器实例」输出**逐字节相同**：
 
 ```python
 e1 = PresidioPIIEngine(db_path=":memory:")
@@ -307,7 +307,7 @@ ID 库关  -> 旧证件号 ⟦PII:BANK_CARD:0001⟧。      ← 仍然脱敏，�
 **推荐 A**，并补齐三条硬要求（缺一不可）：
 1. **禁用 = 不实例化**，`_sync_recognizers()` 必须在拼接前过滤（`presidio_pii/engine.py:92-96` 目前是纯 `builtin + rules`，无过滤钩子）。
 2. **必须有测试断言「关掉后结果里真的没有」**——Presidio issue #950 的教训是 `remove_recognizer()` 之后 `analyze()` 仍返回该实体。
-3. **「全关」是合法状态**，不得命中「0 条保留旧规则」分支（R-01）。必须用显式空状态表达，而不是延续 `(?!)` 占位规则的权宜之计（`plugins/dsh-pii-guard-terms/lib/index.js:47/249-258`）。
+3. **「全关」是合法状态**，不得命中「0 条保留旧规则」分支（R-01）。必须用显式空状态表达，而不是延续 `(?!)` 占位规则的权宜之计（`plugins/dsh-presidio-pii/lib/terms.js:47/249-258`）。
 
 ### 2.7 坐标契约（最容易被忽略，但最致命）
 
@@ -364,7 +364,7 @@ ID 库关  -> 旧证件号 ⟦PII:BANK_CARD:0001⟧。      ← 仍然脱敏，�
 - **L2（推荐）**：清单里存每个库文件的**内容哈希**，签名 = 清单自身的内容哈希。一次 stat 覆盖全部，还能检出「库文件被改但 mtime 没变」的边界情况。
 
 另外两点：
-- `presidio_pii/server.py` 目前只有 `redact` / `restore`（分派在 `server.py:92-102`），**没有 reload op**。加上它，「点开关立刻生效」才能从「等 1 秒」升级为确定性行为，也是解除 `plugins/dsh-pii-guard-terms/README.md:55`「改路径需重启 DSH」的唯一路径（R-04）。
+- `presidio_pii/server.py` 目前只有 `redact` / `restore`（分派在 `server.py:92-102`），**没有 reload op**。加上它，「点开关立刻生效」才能从「等 1 秒」升级为确定性行为，也是解除 `plugins/dsh-presidio-pii/README.md:55`「改路径需重启 DSH」的唯一路径（R-04）。
 - **写盘顺序 = 先写库文件，后写清单**。清单是提交点，避免「新开关 + 旧规则」的中间态。
 
 ### 2.10 优先级与冲突
@@ -376,7 +376,7 @@ ID 库关  -> 旧证件号 ⟦PII:BANK_CARD:0001⟧。      ← 仍然脱敏，�
 1. **按类型计权、不按规则计权**。15 个库对应 13 个类型键（`engine.py:38-41` 的 `_PRIO`），两个 PHONE 库（手机/座机）只能共用一个优先级。
 2. **未声明 priority 一律 99**，会反转 `PERSON(8)` 与 `ORGANIZATION(10)` 的次序。
 3. **`entity_priorities()` 同类型取最小值**（`custom_rules.py:411-421`；docstring 写「取最高优先级」，数值上最小才算最高）——语义是「这个类型整体按最高优先级算」，关掉高优先级库后该类型优先级不会回落到内置值。
-4. **用户词 `priority: 0` 与 `ID_NUMBER` 撞车**。UI 写的每条 USER_TERM 规则都是 `priority: 0`（`plugins/dsh-pii-guard-terms/lib/index.js:241-248`），与 `_PRIO["ID_NUMBER"] = 0` 同权；等长重叠时裁决退化成「看起点」。这是既有行为但从未被文档化。
+4. **用户词 `priority: 0` 与 `ID_NUMBER` 撞车**。UI 写的每条 USER_TERM 规则都是 `priority: 0`（`plugins/dsh-presidio-pii/lib/terms.js:241-248`），与 `_PRIO["ID_NUMBER"] = 0` 同权；等长重叠时裁决退化成「看起点」。这是既有行为但从未被文档化。
 
 **建议的解析顺序**（从高到低）：
 ```
@@ -430,7 +430,7 @@ DSH 自带 `@deepseek-ai/dsh-sdk-minimal`，其 `cordis.patch.yml`（179 行）�
 |---|---|---|---|
 | A1 | 只暴露最少量工具 | ✅ 可行 | `tool-fs` 五开关（`dsh-tool-fs/lib/index.js:1967-1989`）+ `agent.ctx.tools.restrict`（`dsh-tools/lib/index.js:453-467`） |
 | A2 | 工具级钉死脱敏 | ⚠️ 只能钉住一半 | `post-execute` 可换成功结果的 `content`/`value`，**不能**换 `isError`（`pipeline.js:687`、`:744-746`） |
-| A3 | 工具级钉死还原 | ✅ 可行，已有生产范式 | `plugins/dsh-pii-guard/lib/index.js:618-659` scoped shadow |
+| A3 | 工具级钉死还原 | ✅ 可行，已有生产范式 | `plugins/dsh-presidio-pii/lib/guard.js:618-659` scoped shadow |
 | A4 | 强语言约束禁止 bash 读文件 | ❌ 不可作为安全边界 | Windows 沙箱只管写（`dsh-pwsh-sandbox/README.md:140`）；仓库 `DECISION-shell-redaction.md:19` 已论证白名单不可靠 |
 | A5 | md 中转 + write_docx 按模板还原 | ⚠️ 需求内部矛盾 | `presidio_pii/documents.py:295-302` 注释「最小实现: 重写首个 run, 其余 run 清空 (丢失段内混合格式)」 |
 
@@ -451,7 +451,7 @@ if (resolved.write || resolved.edit || resolved.applyPatch) {
 
 `restrict`（`dsh-tools/lib/index.js:453-467`）四个约束：必须 agent scope（`:455`）、空 filter 抛错（`:458`）、不能命名 `run_code`（`:463`）、未知名抛错（`:464-466`）；返回 disposer（`:467`）。
 
-**A3 的范式**（`plugins/dsh-pii-guard/lib/index.js:618-659`）：
+**A3 的范式**（`plugins/dsh-presidio-pii/lib/guard.js:618-659`）：
 ```js
 ctx.on("agent/created", ({ agent }) => {
   const actx = agent?.ctx;
@@ -532,7 +532,7 @@ const settle = (result) => {
 
 ### 4.4 约束四：用户粘贴的文本在工具级守卫之外
 
-`plugins/dsh-pii-guard/lib/index.js:661-663` 注释原文：
+`plugins/dsh-presidio-pii/lib/guard.js:661-663` 注释原文：
 > 「不改 decision.messages：该机制与 session log / KV cache 脱节，只做可观测告警」
 
 代码只做计数告警：`console.error("[pii-guard] pre-step WARN: ... (not redacted; user-pasted text is outside the tool-result guard)")`。
@@ -677,7 +677,7 @@ ctx.on("tools/post-execute", async (exec, result, next) => {
 | R-05 | **清单不进签名 → 改开关不触发 reload** | 🪤 | `custom_rules.py:367-376` 只遍历 `self.sources` | 开关状态永远停在首次加载时的快照 | 2.9 的 L1/L2 |
 | R-06 | **跨库依赖未声明 → 关掉 A 使 B 失效** | 🎯 | `chinese_recognizers.py:384-386` 类注释：「必须与 18 位分开: 混合正则会让 15 位被 BANK_CARD 抢走 (13-19 位数!)，导致脱敏了但类型错误」 | 关了身份证库 → 15 位号码被识别成银行卡，**脱敏了但类型错误**（占位符类型错 → 语义丢失，非同类型不可互换） | manifest `requires` / `excludes`，加载期校验 |
 | R-07 | **类型名是跨会话契约，改名即不可还原** | 🎯 | `engine.py:243`；`restore()` 按占位符字面匹配（`:266-294`） | 库的 `emits` 从 `LOCATION` 改成 `ADDRESS` → 历史会话里的 `⟦PII:LOCATION:0001⟧` 永远还原不了 | `emits` 白名单 + 内置类型名冻结；改名必须提供映射表 |
-| R-08 | **规则库自己会变成明文 PII 存储面** | 🎯 | 现用户词表就是「一条一条规则」形态（`plugins/dsh-pii-guard-terms/lib/index.js:240-264`），`pattern` 是 `escapeLiteral(term)` 的原文 | 用户为提升召回把真名写成精确匹配 → 脱敏工具的配置目录成了明文 PII 集合，被 git / 云盘 / 备份 / 分享带走。**保护工具变成泄漏源。** | 见 5.5：默认禁字面量精确规则、只允许结构化模式；确需精确匹配走 `USER_TERM` 白名单通道并强制落 `.pii_presidio_store/`；门禁 #11 扩到规则库目录 |
+| R-08 | **规则库自己会变成明文 PII 存储面** | 🎯 | 现用户词表就是「一条一条规则」形态（`plugins/dsh-presidio-pii/lib/terms.js:240-264`），`pattern` 是 `escapeLiteral(term)` 的原文 | 用户为提升召回把真名写成精确匹配 → 脱敏工具的配置目录成了明文 PII 集合，被 git / 云盘 / 备份 / 分享带走。**保护工具变成泄漏源。** | 见 5.5：默认禁字面量精确规则、只允许结构化模式；确需精确匹配走 `USER_TERM` 白名单通道并强制落 `.pii_presidio_store/`；门禁 #11 扩到规则库目录 |
 | R-40 | **`entity_types: []` 的真实语义是「全部启用」，不是「全部关闭」** | 🪤 | `engine.py:178`：`if not self.entity_types: return results`；实测 `entity_types=[]` 与 `=None` 输出完全一致，两类都照常脱敏。UI 提示也写「全部取消勾选表示启用全部类型」（`client.js:67`） | 用户想「全关」写下空数组 → 实际「全开」。这是隐私工具里最危险的默认值方向：**以为关了一切，实际全开** | 引入独立的 `entity_types_mode: "allow-all" \| "allow-list"`，`[]` 在 `allow-list` 模式下表示全关；或至少把 `[]` 视为非法并在加载期 `_warn`。UI 侧把「全部取消」明确渲染成两个不同动作 |
 | R-41 | **任意一条自定义规则会让该实体类型永久关不掉（开关失效）** | 🪤 | `engine.py:181`：`allowed = self.entity_types \| {t for t in custom if t}`。实测：关掉 `PERSON` 后，只要存在一条 `entity_type=PERSON` 的自定义规则，输出仍是 `⟦PII:PERSON:0001⟧与⟦PII:PERSON:0002⟧参会。`；无自定义规则时同样输入是 `欧阳娜娜与张伟参会。`（全明文） | 用户勾掉「人名库」、UI 打勾状态正确，**但人名仍被屏蔽**。这是「用户以为自己关了，实际没关」的反向版本：用户想放行却放行不了 | `custom` 的类型豁免只应给 `USER_TERM` 这类「纯用户词」类型，不应外溢到内置类型；或按规则来源细分优先级：内置库被禁用时连自定义规则一并停用，并在 UI 提示「该类型下有 N 条自定义规则，禁用将同时停用」 |
 | R-42 | **名册通道被误当成独立库（设计错误，本次修正）** | 🎯 | 实测 `ChinesePersonRecognizer` 与 `ChineseRosterPersonRecognizer` 是**互补**而非互斥：`名单：张三、杨同初（26）、李四、欧阳娜娜。` 前者只出「张三、李四」，后者补齐「杨同初、欧阳娜娜」；`原班级学号名单（28人）…` 场景前者 5 个、后者 9 个（含「邝也」「陈敬之」） | 若把名册拆成独立库，用户关掉它 → **常见姓名被屏蔽、罕见姓名/复姓/三字名全部明文**，而用户以为还开着人名库。比全关更危险（假安全） | 名册必须作为 `builtin.person` 的内部通道（`rules[].id = "person.roster"`），在 manifest 层禁止单独 `enabled`；库级开关只按 `emits`/`entity_type` 生效 |
@@ -691,9 +691,9 @@ ctx.on("tools/post-execute", async (exec, result, next) => {
 | R-09 | **`wants_raw` 硬编码导致坐标契约丢失** | 🎯 | `custom_rules.py:117`、`:155` | `coordinate` 库级必填（2.7） |
 | R-10 | **`_PRIO` 按类型计权，15 包 vs 13 键** | 🎯 | `engine.py:38-41`；`engine.py:206` 的 `priority.get(..., 99)` | 四级解析顺序（2.10） |
 | R-11 | **关库会让原本被吞掉的短实体「浮出水面」** | 🪤 | `_resolve_overlaps`（`engine.py:197-213`）只做长优先吞并，**无回退逻辑**。实测：`安徽省数据资源管理局在合肥` → 全开输出 `ORGANIZATION[安徽省数据资源管理局]`；摘掉 `ChineseOrganizationRecognizer` 后输出 `LOCATION[安徽省]` | 变更库组合必须跑全量回归并 diff 类型分布；UI 关库时提示「该库此前压制了哪些短实体」 |
-| R-12 | **第四处配置副本让门禁等式失真** | 🧩 | `plugins/dsh-pii-guard-terms/lib/index.js:37` ↔ `preset.json:21` ↔ `release_gate.py:319-320`，判据 `:323` | 门禁改为「preset 路径 == 清单路径」+「清单内每库 path 存在」 |
+| R-12 | **第四处配置副本让门禁等式失真** | 🧩 | `plugins/dsh-presidio-pii/lib/terms.js:37` ↔ `preset.json:21` ↔ `release_gate.py:319-320`，判据 `:323` | 门禁改为「preset 路径 == 清单路径」+「清单内每库 path 存在」 |
 | R-13 | **`_preset_path()` 依赖文件已存在** | 🪤 | `hooks.py:76-80`：`next((c for c in candidates if c.exists()), candidates[0])` | 新键必须指向已存在文件，否则静默退化到仓库根；加显式告警 |
-| R-14 | **`warnIfPathDrift()` 只 console.error 不阻断** | 🪤 | `plugins/dsh-pii-guard-terms/lib/index.js:332-341` | 升级为强校验，或至少写入状态接口 |
+| R-14 | **`warnIfPathDrift()` 只 console.error 不阻断** | 🪤 | `plugins/dsh-presidio-pii/lib/terms.js:332-341` | 升级为强校验，或至少写入状态接口 |
 | R-15 | **门禁对「关库」几乎零覆盖：13 个包无断言，只有 PERSON 被硬绑** | 🧱 | `release_gate.py:72-96`：`eng = PresidioPIIEngine(db_path=...)` **直接构造引擎、绕过 hooks**，清单里的 `enabled` 根本不读；断言只有 `counts.get("PERSON",0) > 0`（paper-01）与 `personal == 0`（normal-01 四类和）。实测 `paper-01` = `{PERSON:8, ORGANIZATION:2, LOCATION:1, EMAIL_ADDRESS:1}`，`normal-01` = `{ORGANIZATION:2}` → **关 PERSON 必 FAIL；关 ORGANIZATION/LOCATION/EMAIL 等则 FAIL 不了** | 门禁改「按清单加载」+ 逐库断言：①默认 enabled 时产出 > 0；②disabled 时该类型产出 == 0 且其余不变 |
 | R-16 | **测试硬契约会被打破** | 🧱 | `tests/js/plugin_terms.mjs:115`（`routes.size === 4`）、`:223`（settings 恰好 4 键）、`tests/test_user_terms.py:125-129`、`tests/test_custom_rules.py:470-489` | 改契约必须同步改测试，**不能为过测试弱化断言** |
 | R-17 | **`plugin_terms.mjs:108` 自己把 preset 写成 `{config:{custom_rules_path}}`** | 🧱 | 同上 | S2 判据改动时这一行必须一起改 |
@@ -704,7 +704,7 @@ ctx.on("tools/post-execute", async (exec, result, next) => {
 | R-22 | **仓库内规则库与门禁 #11 判据错位** | 🧱 | `_FORBIDDEN_TRACKED`（`release_gate.py:704-706`）**只按路径**判定，扫 `git ls-files`（`:711-712`）与 `git status --porcelain`（`:713-715`），再断言 `.gitignore` 规则数 `>= 5`（`:716-719`） | 一份放在仓库内 `rule_libraries/` 的示例库若混入真名，**#11 照样 PASS**。要么扩扫内容，要么强制示例库走虚构语料并加断言 |
 | R-23 | **`replaces` 依赖 id 稳定，用户自造 id 会撞车** | 🪤 | manifest 里 `replaces`/`requires`/`excludes` 全按 `id` 引用（2.5） | 命名空间规则：内置带 `builtin.` 前缀，用户库禁用该前缀 |
 | R-45 | **自定义类型不在 `_PRIO` 里 → 等长冲突永远垫底** | 🎯 | `_PRIO` 只有 13 个内置类型（`engine.py:38-41`），`_PRIO.get("AGE", 99)` = 99 vs `_PRIO["PERSON"]` = 8 | `AGE`、`USER_TERM`、工号、微信号等所有自定义字段库，与内置类型等长重叠时**无条件输**，字段被别的类型吞掉 | manifest 允许声明 `priority`，或新增 `_PRIO` 兜底规则：自定义类型默认取「同区间内置类型的最大值 + 1」 |
-| R-46 | **自定义类型不从 UI 的 `knownEntityTypes` 走 → 看得见效果、关不掉开关** | 🪤 | `knownEntityTypes` 硬编码 13 类（`plugins/dsh-pii-guard-terms/lib/index.js:288-292` 的 `PRESET_DEFAULT_ENTITY_TYPES`，`:308` 直接返回）；`engine.py:181` 对 `custom` 类型豁免 | 存在 AGE 规则时：不设 `entity_types` / 13 类全勾 / 只勾 PERSON **三种都输出 `[("AGE","45")]`**，用户永远关不掉 | 让 UI 的 `knownEntityTypes` 从 `/api/.../terms` 一并返回当前规则里出现的类型；或引入 `locked: true`（如 `USER_TERM`）与普通自定义类型两种语义 |
+| R-46 | **自定义类型不从 UI 的 `knownEntityTypes` 走 → 看得见效果、关不掉开关** | 🪤 | `knownEntityTypes` 硬编码 13 类（`plugins/dsh-presidio-pii/lib/terms.js:288-292` 的 `PRESET_DEFAULT_ENTITY_TYPES`，`:308` 直接返回）；`engine.py:181` 对 `custom` 类型豁免 | 存在 AGE 规则时：不设 `entity_types` / 13 类全勾 / 只勾 PERSON **三种都输出 `[("AGE","45")]`**，用户永远关不掉 | 让 UI 的 `knownEntityTypes` 从 `/api/.../terms` 一并返回当前规则里出现的类型；或引入 `locked: true`（如 `USER_TERM`）与普通自定义类型两种语义 |
 | R-47 | **CLI 完全没有库级开关入口** | 🧩 | `presidio_pii/cli.py` grep `entity_types`/`entity-type` **零命中**；`cli.py:83` `return PresidioPIIEngine(**kwargs)` 只传 db_path/custom_rules/whitelist；`cli.py:339` restore 分支直接 `PresidioPIIEngine(db_path=":memory:")` | 同一份配置在 DSH 预设与 CLI 两条路径上行为不同；而 CLI 正是 office 二进制、离线批量场景的主入口 | 加 `--entity-types PHONE_NUMBER,ID_NUMBER` 与 `--no-entity-types`，语义与 `preset.json` 的 `entity_types` 对齐 |
 
 #### P2（16 条）
@@ -716,7 +716,7 @@ ctx.on("tools/post-execute", async (exec, result, next) => {
 | R-26 | 替换内置库后的升级覆盖 | Elastic：「each update replaces the rule with the Elastic version」 |
 | R-27 | 无法用 JSON 替换过程式库 | 5 个过程式识别器只能被 `kind: code` 替换，而 code = 执行任意 Python。**产品决策，不是技术细节** |
 | R-28 | 默认集怎么定 | Presidio 策略可抄：默认关小众、只开通用高精度 |
-| R-29 | UI 承载能力不足 | `handleList` 返回 `string[]`（`plugins/dsh-pii-guard-terms/lib/index.js:347-362`），无分组/无来源/无启停；`client.js:517-522` 硬绑两块面板 |
+| R-29 | UI 承载能力不足 | `handleList` 返回 `string[]`（`plugins/dsh-presidio-pii/lib/terms.js:347-362`），无分组/无来源/无启停；`client.js:517-522` 硬绑两块面板 |
 | R-30 | 规则库与引擎版本兼容 | manifest 需 `schema` + `min_engine_version` |
 | R-31 | 规则库来源可信性 | OPA 用 `.signatures.json` + JWT；nuclei 用 ECDSA。本项目至少要有「来源标注 + 内容哈希」 |
 | R-32 | 分发型规则库不能落 `.pii_presidio_store/` | 该目录被 `.gitignore:5` 与门禁 #11 禁入，是用户态数据 |
@@ -739,7 +739,7 @@ ctx.on("tools/post-execute", async (exec, result, next) => {
 | T-03 | `isError` 结果不可脱敏，而 fs 层 57 处错误中 39 处内嵌 `displayPath` | 📁 | `pipeline.js:687`、`:744-746`；`dsh-fs-local/lib/index.js` 39 处行号见附录 A | 自建工具内部 catch + 抹路径（必做）；第三方可选强 block |
 | T-04 | PTC `run_code` 给程序的是 canonical value | 🎯 | `dsh-tool-executor-ptc/lib/index.js:514-521`；`dsh-tools/README.md` canonical value 限制 | 预设禁止挂 `dsh-tool-executor-ptc` + 门禁断言 |
 | T-05 | 读通道多元：`grep` / `spill` / session JSONL 全是原文 | 🎯 | `tool-fs-search/README.md`、`spill-local/README.md`、`session-persistence-jsonl/README.md` | `grep` 属 agent 平面（不写就没）；`spill-local`/`spill-policy`/`session-persistence-jsonl` 属 host 平面，只能改 `$DSH_HOME/cordis.patch.yml` 或接受 |
-| T-06 | 用户粘贴文本在工具级守卫之外 | 🎯 | `plugins/dsh-pii-guard/lib/index.js:661-677` 注释原文 | 文档明写；客户端侧脱敏（超出本方案） |
+| T-06 | 用户粘贴文本在工具级守卫之外 | 🎯 | `plugins/dsh-presidio-pii/lib/guard.js:661-677` 注释原文 | 文档明写；客户端侧脱敏（超出本方案） |
 | T-07 | spill 落盘原文 + 两个 prepend 监听器顺序无保证 | 🎯 | `dsh-spill-policy/lib/index.js:237-255`（`:239` 姓名级豁免）、`cordis/lib/index.js:919-929`（`unshift`） | 自建工具自限长；门禁断言 spill 目录里是占位符 |
 | T-27 | **MCP 工具是第四条读通道，且全局注册、agent 平面管不到** | 🎯 | `dsh-mcp-client/lib/index.js:153` 用全局 `ctx.tools.register`；`$DSH_HOME/cordis.patch.yml` 挂 6 个 server；`scripts/mcp-codebuddy.js:135-138` 把 `--task/--workdir/--files` 交给外部 CLI；`mcp__playwright__*` 可开 `file://` | home 层删除直读类 MCP（codebuddy / playwright）；其余按需保留 |
 
@@ -754,8 +754,8 @@ ctx.on("tools/post-execute", async (exec, result, next) => {
 | T-12 | `tool-fs-search` 无单工具开关（只能整包取舍） | 🎯 | `tool-fs-search/README.md` 配置表只有 `sampleOverCapGlobResults` 等；web-app `:509-510` 已 disabled | 预设里**不写**即可；需 grep 能力时自建 `grep_redacted` |
 | T-13 | `spill` 的 `retrievalHint` 主动教模型去读原文 | 🎯 | `spill-local/README.md` 原文 | 自建工具里抹掉 locator / hint |
 | T-14 | 会话 JSONL 明文（默认 zstd 也非加密） | 🎯 | `session-persistence-jsonl/README.md` | 文档明写；或改 `compression: none` + 受限目录（但 shell 仍可读） |
-| T-15 | `failOpen` 开关存在，打开就变成「无保护工具面」 | 🎯 | `plugins/dsh-pii-guard/lib/index.js:93`、`:128`、`:603` | 极简预设**禁止** `PII_GUARD_FAIL_OPEN=1` + 门禁断言 |
-| T-16 | 写入侧 tool/call 落盘的是占位符版参数 → 审计看不出真实写入 | 🧱 | `plugins/dsh-pii-guard/lib/index.js:618-659` 注释原文 | 增「写入时记 ph→type」审计事件，只记类型不记原文 |
+| T-15 | `failOpen` 开关存在，打开就变成「无保护工具面」 | 🎯 | `plugins/dsh-presidio-pii/lib/guard.js:93`、`:128`、`:603` | 极简预设**禁止** `PII_GUARD_FAIL_OPEN=1` + 门禁断言 |
+| T-16 | 写入侧 tool/call 落盘的是占位符版参数 → 审计看不出真实写入 | 🧱 | `plugins/dsh-presidio-pii/lib/guard.js:618-659` 注释原文 | 增「写入时记 ph→type」审计事件，只记类型不记原文 |
 | T-17 | 占位符编号跨文档共享（`counters` 全局递增），跨文档同号可能撞 | 🎯 | `engine.py:243` | 批量处理必须 `commit=False` 后整批 commit（已有约定），或改文档内计数 |
 | T-18 | docx `md` 中转丢段内格式，与「按模板还原」冲突 | 🧱 | `documents.py:295-302` 注释、`office-docx/SKILL.md` 原文 | 产品拍板路线 α / β（见 7） |
 
@@ -770,7 +770,7 @@ ctx.on("tools/post-execute", async (exec, result, next) => {
 | T-21 | `python-docx` 不分页不渲染 | `office-docx/SKILL.md` 原文 | 明写限制；需渲染时走 `office-render` |
 | T-22 | md 中转丢批注/修订/内容控件/域代码/公式 | `documents.py:321-347` 已在捞 textbox/comments，说明这些是真实格式 | 路线 β 时明写「不保留」 |
 | T-23 | 自建工具的正则无超时，用户自定义规则可 ReDoS | 参考 Presidio `REGEX_TIMEOUT_SECONDS` 默认 60s 且超时只 warn | 加超时 + 指标 |
-| T-24 | `restrict` deny 掉 `read_image` 会导致附件图无法看（现有 pii-guard 已这么做） | `plugins/dsh-pii-guard/lib/index.js:650` + 注释 | 保持现状，文档明写 |
+| T-24 | `restrict` deny 掉 `read_image` 会导致附件图无法看（现有 pii-guard 已这么做） | `plugins/dsh-presidio-pii/lib/guard.js:650` + 注释 | 保持现状，文档明写 |
 | T-25 | `present` 工具暴露源文件路径 | `office-docx/SKILL.md`「It exposes the current source file without copying or preserving its bytes」 | 文件名在写入前就改成占位符名 |
 | T-26 | 持久 shell 的 description 写着误导性文案 | `dsh-sdk-minimal/cordis.patch.yml:166` | 自建工具描述要写准确 |
 
@@ -799,7 +799,7 @@ ctx.on("tools/post-execute", async (exec, result, next) => {
 { "name": "user-term-0001", "entity_type": "USER_TERM",
   "pattern": "张三", "score": 0.95, "priority": 0, "term": "张三" }
 ```
-`pattern` 是 `escapeLiteral(term)` 的结果（`plugins/dsh-pii-guard-terms/lib/index.js:241-248`），即**原文以明文形式躺在磁盘上**。当前只有「用户主动屏蔽词」一个入口，体量有限；一旦开放「加载/替换整个规则库」，动机链条会自然把体量放大：
+`pattern` 是 `escapeLiteral(term)` 的结果（`plugins/dsh-presidio-pii/lib/terms.js:241-248`），即**原文以明文形式躺在磁盘上**。当前只有「用户主动屏蔽词」一个入口，体量有限；一旦开放「加载/替换整个规则库」，动机链条会自然把体量放大：
 
 > 想让某个人名 100% 被识别 → 最直观的做法就是把人名写成一条精确匹配规则。
 
@@ -860,7 +860,7 @@ PresidioPIIEngine(entity_types=["PERSOM", "PHONE_NUMBER"])   # 少一个 N
 #       ^^^^^^ PERSON 库整体消失，原文直接进模型
 ```
 
-`_filter_entity_types` 只是 `r.entity_type in allowed` 的集合判定，拼错的字符串永远不会命中任何实体，于是**一行 putStr 写错就把整个人名库关掉了**。UI 保存侧有白名单校验（`plugins/dsh-pii-guard-terms/lib/index.js:326-332`：`if (!allowed.has(raw)) throw new Error("unknown entity type: " + raw)`），但**直接编辑 `preset.json` 完全没有校验路径**——而 `preset.json` 是文档里教用户手改的文件。
+`_filter_entity_types` 只是 `r.entity_type in allowed` 的集合判定，拼错的字符串永远不会命中任何实体，于是**一行 putStr 写错就把整个人名库关掉了**。UI 保存侧有白名单校验（`plugins/dsh-presidio-pii/lib/terms.js:326-332`：`if (!allowed.has(raw)) throw new Error("unknown entity type: " + raw)`），但**直接编辑 `preset.json` 完全没有校验路径**——而 `preset.json` 是文档里教用户手改的文件。
 
 对策：加载期把 `entity_types` 与 `get_chinese_recognizers()` 实际产出的类型集合做差集，差集非空则 `_warn` 并保留旧值（复用 `CustomRuleSet.refresh` 的「0 条规则保留旧值」同一套哲学）。
 
@@ -886,7 +886,7 @@ PresidioPIIEngine(entity_types=["PERSOM", "PHONE_NUMBER"])   # 少一个 N
 
 #### R-46（P1）自定义类型不从 UI 的 `knownEntityTypes` 走 → 用户看得见效果、关不掉开关
 
-`knownEntityTypes` 硬编码为 13 个内置类型（`plugins/dsh-pii-guard-terms/lib/index.js:288-292` 的 `PRESET_DEFAULT_ENTITY_TYPES`，`:308` 直接返回）。而 `engine.py:181` 的类型豁免让自定义类型**永远保留**：
+`knownEntityTypes` 硬编码为 13 个内置类型（`plugins/dsh-presidio-pii/lib/terms.js:288-292` 的 `PRESET_DEFAULT_ENTITY_TYPES`，`:308` 直接返回）。而 `engine.py:181` 的类型豁免让自定义类型**永远保留**：
 
 ```python
 # 存在一条 AGE 规则时
@@ -910,7 +910,7 @@ PresidioPIIEngine(entity_types=["PERSOM", "PHONE_NUMBER"])   # 少一个 N
 | 位置 | 语义 |
 |---|---|
 | `presidio_pii/engine.py:178` | `if not self.entity_types: return results` → **全部启用** |
-| `plugins/dsh-pii-guard-terms/client.js:67` | 「全部取消勾选表示启用全部类型」→ 同上 |
+| `plugins/dsh-presidio-pii/client.js:67` | 「全部取消勾选表示启用全部类型」→ 同上 |
 | `docs/` 各处的 manifest 示例 | 未说明 |
 
 三处一致，所以不是 bug——但它和用户对「空集合 = 空集」的直觉相反。这是 R-40 的根因，也是**唯一一个「行为正确但直觉错误」必须靠文案解决**的点。
@@ -1063,8 +1063,8 @@ PresidioPIIEngine(entity_types=["PERSOM", "PHONE_NUMBER"])   # 少一个 N
 **本仓库**
 - 引擎与规则加载：`presidio_pii/engine.py`、`presidio_pii/custom_rules.py`、`presidio_pii/chinese_recognizers.py`
 - 配置面：`presidio_pii/hooks.py`、`.agent-presets/presidio-pii/preset.json`
-- UI：`plugins/dsh-pii-guard-terms/lib/index.js`、`client.js`
-- 拦截：`plugins/dsh-pii-guard/lib/index.js`
+- UI：`plugins/dsh-presidio-pii/lib/terms.js`、`client.js`
+- 拦截：`plugins/dsh-presidio-pii/lib/guard.js`
 - 门禁：`tools/release_gate.py`、`docs/RELEASE-GATE.md`
 - 设计约定：`agent.md` §3
 - DSH 侧：`dsh-tool-fs`、`dsh-tools`、`dsh-tool-executor-ptc`、`dsh-spill-policy`、`dsh-mcp-client`、`dsh-web-app/cordis.patch.yml`、`dsh-base/cordis.patch.yml`

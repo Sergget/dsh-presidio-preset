@@ -1,4 +1,4 @@
-// Smoke test for the dsh-pii-guard-terms Host half.
+// Smoke test for the dsh-presidio-pii Host half.
 //
 // The Host half owns four JSON routes: two for the terms blocklist and two
 // for the P0/P1 runtime settings. These tests drive the real handlers through
@@ -13,9 +13,10 @@ import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-// FIX-1: 从测试文件位置推断仓库根（tests/js -> ../..），不再写死作者机器路径。
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const HOST_HALF = join(REPO, 'plugins', 'dsh-pii-guard-terms', 'lib', 'index.js');
+const HOST_HALF = process.argv[2]
+  ? resolve(process.argv[2])
+  : join(REPO, 'plugins', 'dsh-presidio-pii', 'lib', 'terms.js');
 
 const { apply, name: HOST_NAME } = await import(pathToFileURL(HOST_HALF).href);
 

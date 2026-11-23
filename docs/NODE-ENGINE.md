@@ -49,7 +49,7 @@
 
 | 文件 | 变更 |
 |------|------|
-| `plugins/dsh-pii-guard/lib/index.js` | spawn 目标 `python server.py` → `NODE_BIN node_pii/server.mjs`（`PII_GUARD_NODE` env / 兼容 `PII_GUARD_PY` / `process.execPath` 兜底）；哨兵文件 `server.py` → `server.mjs` |
+| `plugins/dsh-presidio-pii/lib/guard.js` | spawn 目标 `python server.py` → `NODE_BIN node_pii/server.mjs`（`PII_GUARD_NODE` env / 兼容 `PII_GUARD_PY` / `process.execPath` 兜底）；哨兵文件 `server.py` → `server.mjs` |
 | `tools/install.ps1` | Python 3.9~3.13 版本校验 → Node ≥22.5 + node:sqlite 可用性校验 + `node_pii/server.mjs` 哨兵；UTF-8 BOM |
 | `tools/verify_install.ps1` | 第 1 项 `node --check node_pii/server.mjs`、第 2 项协议 smoke；UTF-8 BOM |
 

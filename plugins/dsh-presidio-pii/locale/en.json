@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "PII Protection",
+    "description": "Unified PII guard preset, runtime redaction hooks, safe FS tools, and blocklist/settings UI."
+  }
+}

@@ -23,16 +23,22 @@
 
 - `.agent-presets/presidio-pii/agent.cordis.yml`（仓库侧预设模板）
 - `.agent-presets/presidio-pii/bundle/cordis.patch.yml`（安装用 bundle 模板）
-- `E:/Code/dsh_home/cordis.patch.yml` 的 `preset-presidio-pii` **实际生效定义**
-  （已备份为 `cordis.patch.yml.bak-phase1-20261120-133810`）
+- `$DSH_HOME/cordis.patch.yml` 的 `preset-presidio-pii` **实际生效定义**
+  （当时已备份为 `cordis.patch.yml.bak-phase1-20261120-133810`）
 
 顺带修掉一个真实缺陷：home 层 `pii-guard` 行原先没有 `config.repo`，部署在
 `DSH_HOME` 时从模块路径推断仓库根必然失败，启动即打
-`[pii-guard] 无法确定仓库根` 并回落。现已显式写入 `repo: 'E:/Code/dsh-presidio-preset'`。
+`[pii-guard] 无法确定仓库根` 并回落。当时以显式 `config.repo` 兜住。
+
+> **后续变更（统一 bundle 之后）**：home 层的内联 `preset-presidio-pii` 已被删除，
+> 改为由单一 bundle `dsh-presidio-pii` 自带的 `cordis.patch.yml` 提供；
+> 路径不再需要 `config.repo` 指定，改由 `lib/paths.mjs` 按
+> `config.dataDir` → `PII_GUARD_DATA_DIR` → `config.repo` / `PII_GUARD_REPO` →
+> `$DSH_HOME/data/presidio-pii` 的优先级解析。
 
 ### 1.2 四件套插件
 
-`plugins/dsh-pii-guard-fs/lib/index.mjs`（零 DSH 包依赖，与既有插件同风格）：
+`plugins/dsh-presidio-pii/lib/fs.mjs`（零 DSH 包依赖，与既有插件同风格）：
 
 - `read_redacted`：读文件 → 交给 PII 引擎 → 返回**占位符文本**（原文不出模型侧）
 - `write_raw`：把 `restore` 还原后的原文落盘
@@ -58,13 +64,20 @@ fail-closed：引擎拿不到时 `setRedact` 直接抛错，工具返回 error �
 | ③ | spill 目录内无嵌套占位符 `⟦PII:⟦PII:`、无 ≥6 位未脱敏数字串 | `.pii_presidio_store/spill{,-local}` |
 
 并接入 `tools/release_gate.py` 第 13 项（额外静态断言：预设不得再挂
-`dsh-tool-bash/pwsh/fs/fs-search/todo/web`，且必须挂 `dsh-pii-guard-fs`）。
+`dsh-tool-bash/pwsh/fs/fs-search/todo/web`，且必须挂 `dsh-presidio-pii/fs`）。
 
 ### 1.4 安装链
 
-`tools/install.ps1` 增加第 3b 步：把 `plugins/dsh-pii-guard-fs/lib/index.mjs`
-复制到 `DSH_HOME/plugins/dsh-pii-guard-fs/lib/index.mjs`，与 guard 插件同样处理。
-`__REPO__` / `__DSH_HOME__` 占位符渲染沿用既有逻辑，渲染后残留占位符直接 Fail。
+（当时）`tools/install.ps1` 增加第 3b 步：把 `plugins/dsh-presidio-pii/lib/fs.mjs`
+复制到 `$DSH_HOME/plugins/dsh-presidio-pii/lib/fs.mjs`，与 guard 插件同样处理；
+bundle patch 里的仓库根与 DSH_HOME 占位符由安装脚本渲染，渲染后残留占位符直接 Fail。
+
+> **后续变更（统一 bundle 之后）**：散装复制与占位符渲染都已废弃。`tools/install.ps1`
+> 现在只做完整性校验 + 遗留残留排查，安装走 DSH 官方 bundle 机制
+> （`plugin_manager install_bundle` / `dsh plugin --profile <name> add <bundleDir>`）。
+> 插件自身通过 `lib/paths.mjs` 从 `import.meta.url` 推导包根，运行期数据目录按
+> `config.dataDir` → `PII_GUARD_DATA_DIR` → `config.repo` / `PII_GUARD_REPO` →
+> `$DSH_HOME/data/presidio-pii` 解析，不需要任何渲染步骤。
 
 ---
 
@@ -79,8 +92,8 @@ fail-closed：引擎拿不到时 `setRedact` 直接抛错，工具返回 error �
 | Node 字段 parity | `node tests/node/extended-fields.mjs` | NODE_EXTENDED_FIELDS_PASS 12 |
 | 四件套回归 | `node tests/node/guard-fs-tools.mjs` | **33 passed, 0 failed** |
 | 词表 UI 插件 | `node tests/js/plugin_terms.mjs` | 75 passed, 0 failed |
-| guard 任务烟测 | `node tests/js/plugin_jobs.mjs plugins/dsh-pii-guard/lib/index.js` | ALL PASS |
-| guard 显示烟测 | `node tests/js/plugin_display.mjs plugins/dsh-pii-guard/lib/index.js` | ALL PASS |
+| guard 任务烟测 | `node tests/js/plugin_jobs.mjs plugins/dsh-presidio-pii/lib/guard.js` | ALL PASS |
+| guard 显示烟测 | `node tests/js/plugin_display.mjs plugins/dsh-presidio-pii/lib/guard.js` | ALL PASS |
 | 门禁①②③ | `node tools/check_phase1_gates.mjs` | GATE_PHASE1_DONE（exit 0） |
 | 门禁第 13 项 | `python tools/release_gate.py --only 13` | PASS |
 | 预设插件解析 | `node tools/verify_preset_plugins.mjs` | PASS（home 18 / bundle 18） |

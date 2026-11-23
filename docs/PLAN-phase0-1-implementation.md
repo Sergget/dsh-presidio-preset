@@ -15,7 +15,7 @@ Python/Node 双端 parity 是硬约束。
 - [x] 0.4 Node：同步 `node_pii/recognizers.mjs` 与 `node_pii/custom_rules.mjs`（paths 别名/导出 loadJsonRules）。
 - [x] 0.5 对拍：extended parity 12 正样本/6 负样本逐实体一致。
 - [x] 0.6 将临时 parity smoke 固化并接入全量测试：`tests/node/extended-fields.mjs`。
-- [x] 0.2'（补做）预设实体清单扩到 20 类：`plugins/dsh-pii-guard-terms/lib/index.js` 的
+- [x] 0.2'（补做）预设实体清单扩到 20 类：`plugins/dsh-presidio-pii/lib/terms.js` 的
       `PRESET_DEFAULT_ENTITY_TYPES` 与 `.agent-presets/presidio-pii/preset.json` 同步加入
       AGE / BIRTH_DATE / GENDER / ETHNICITY / EDUCATION / IM_ACCOUNT / EMPLOYEE_ID。
 - [x] 0.8（2026-11-20 补做）golden 扩到 57 条并接入扩展规则库：
@@ -30,10 +30,10 @@ Python/Node 双端 parity 是硬约束。
 
 - [x] 1.1 重写最小 PII 预设，只挂四件套：`agent.cordis.yml` 与 `bundle/cordis.patch.yml`
       移除 tool-bash / tool-pwsh / tool-fs / tool-fs-search / tool-todo / tool-web，
-      新增 `pii-guard-fs` 行。home 层 `E:/Code/dsh_home/cordis.patch.yml` 的
+      新增 `pii-guard-fs` 行。home 层 `$DSH_HOME/cordis.patch.yml` 的
       preset-presidio-pii 生效定义同步收窄（并补齐 `pii-guard.config.repo`，
       修掉部署态「无法确定仓库根」告警）。
-- [x] 1.2 `read_redacted/write_raw/restore/ls` 落地：`plugins/dsh-pii-guard-fs/lib/index.mjs`，
+- [x] 1.2 `read_redacted/write_raw/restore/ls` 落地：`plugins/dsh-presidio-pii/lib/fs.mjs`，
       D3 抹 displayPath（返回值与错误消息都只留 basename），自限长
       （读 200k / 写 500k / ls 500 条）防止绕开 guard 触发 spill。
 - [x] 1.3 门禁三条：`tools/check_phase1_gates.mjs`（①②③）+ 接入 `tools/release_gate.py` 第 13 项。
