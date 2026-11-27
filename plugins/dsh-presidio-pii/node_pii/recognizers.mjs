@@ -200,6 +200,10 @@ const NON_NAME_CHARS = new Set(
 );
 const NUMBER_CHARS = new Set("一二三四五六七八九十百千万亿零两");
 const NON_NAME_CHARS_NR = new Set([...NON_NAME_CHARS].filter((c) => !NUMBER_CHARS.has(c)));
+// 人名候选之后紧跟这些机构词时，候选几乎肯定是机构名的一部分（"向阳+派出所"）
+const ORG_CONT_AFTER_NAME = ["派出所", "检察院", "法院", "法庭", "司法局", "教育局", "民政局",
+  "公安局", "教体局", "财政局", "人社局", "卫健委", "医院", "学校", "小学", "中学",
+  "大队", "中队", "支队", "中心", "社区", "村委会", "居委会", "工作站"];
 
 const PERSON_STOPWORDS = new Set([
   "封面", "周期", "成熟", "成本", "成为", "万元", "亿元", "百级", "万级", "百万",
@@ -209,6 +213,28 @@ const PERSON_STOPWORDS = new Set([
   "古老", "冷笑", "武林", "明星", "宫殿", "师傅", "师兄", "高潮", "洪水", "顾客",
   "辛勤", "胡子", "桂林", "柏林", "石英", "谢谢", "康复", "沙滩", "梅花", "吉祥",
   "范畴", "孙子", "蓝天", "温泉", "白宫", "万人", "万余",
+  // 2026-11-24 增补：单字姓氏被普通词汇误命中造成丢字（实际事故：
+  // "铁军精神"→"精神"、"宁国/郎溪"地名、"尚未形成"→"形成"）。
+  // 这些词以常见姓氏开头、第二字不在 NON_NAME_CHARS 中，逐一收录；
+  // 用户侧仍可用 whitelist_path 兜底专有名词。
+  "铁军", "铁面", "铁心",
+  "宁国", "宁静", "宁德", "南宁",
+  "尚未", "尚且",
+  "郎溪", "郎中",
+  "严查", "严惩", "严防", "严控", "严打", "严明", "严禁", "严肃",
+  "严格", "严重", "严谨", "严冬", "严寒", "严阵",
+  "单独", "单是", "单一", "单纯",
+  "百科", "百万", "百姓",
+  // 2026-11-25 增补：市民政局汇报会话（f0ac0bab）发现的公文文风误命中。
+  // "高峰"未收录——可能是真人名。
+  "成稿", "成立", "成长", "成合",
+  "商请", "安排", "全国", "文物",
+  "童声", "万户", "查起", "查起诉", "全覆",
+  "司法", "明显", "明天", "曾经",
+  "于轻", "于涉", "关护", "方针",
+  "蓝朋友", "蓝朋", "向阳花", "向阳", "阳花", "农户",
+  // "会议在向阳召开"：向阳已被停用，扫描落到"阳召"——也是地名向阳的切分残片
+  "阳召",
 ]);
 
 const COMPOUND_SURNAMES = new Set([
@@ -410,6 +436,17 @@ function makePersonRecognizer() {
           if ([...probe].slice(1).some((c) => NON_NAME_CHARS.has(c))) continue;
           if (PERSON_STOPWORDS.has(probe)) continue;
           if (length === 3 && probe.length === 3 && PERSON_STOPWORDS.has(probe.slice(0, 2))) continue;
+          const endEarly = i + name.length;
+          // "宣州向阳派出所"/"向阳派出所"：名字候选之后紧跟机构词时，候选几乎
+          // 肯定是机构名的一部分（向阳+派出所），拒绝；对齐 roster 语义。
+          const after = text.slice(endEarly, endEarly + 5);
+          if (ORG_CONT_AFTER_NAME.some((s) => after.startsWith(s))) continue;
+          // 名字候选的中段（"阳派"中的"派"）与机构词重叠时同样拒绝：
+          // 候选第 2 字与后文首字拼出机构前缀（阳派→"派出所"）说明起点偏移了一字。
+          if (length === 2 && endEarly < n && isCjk(text[endEarly])) {
+            const glued = probe[1] + text[endEarly];
+            if (ORG_CONT_AFTER_NAME.some((s) => s.startsWith(glued) && s.length > glued.length)) continue;
+          }
           const end = i + name.length;
           if (covered.has(`${i},${end}`)) break;
           if (!leftContextOk(text, i)) {
@@ -508,11 +545,16 @@ const RE_NATIVE_PLACE = /(?:籍贯|户籍地|户籍所在地)\s*[：:]?\s*(北�
 const LOC_BLACKLIST = new Set(["开发区", "高新区", "经开区", "示范区", "试验区", "工业区",
   "商业区", "住宅区", "风景区", "旅游区", "保税区", "城镇",
   "乡镇", "城区", "郊区", "市区", "社区", "园区", "区域",
-  "辖区", "小区", "地区"]);
+  "辖区", "小区", "地区",
+  // 2026-11-27 增补："致全市…"的公文收束语被 generic 正则剥"致"后命中。
+  // LOC_LEFT_OK 里没有"致"，本规则是冗余防线（"致"开头的左侧检查已拒绝）。
+  "致全市"]);
 const LOC_COUNTRY = new Set(["中国", "美国", "日本", "英国", "法国", "德国", "俄罗斯", "印度",
   "韩国", "朝鲜", "加拿大", "澳大利亚", "新加坡", "欧盟",
   "全国", "全省", "全市", "全县", "全区"]);
 const LOC_LEFT_OK = new Set("在到由从向于与和及为是、，。（）：市省县区镇乡村");
+// 公文动词开头的非地名（"致全市台球室""致全市人民"）
+const LOC_VERB_HEAD = new Set("致发下发印转呈送");
 const PROVINCES = new Set(["北京", "上海", "天津", "重庆", "河北", "山西", "辽宁", "吉林", "黑龙江",
   "江苏", "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北", "湖南",
   "广东", "海南", "四川", "贵州", "云南", "陕西", "甘肃", "青海", "台湾",
@@ -554,7 +596,13 @@ function makeLocationRecognizer(assets) {
         if (name.length < 3) continue;
         if (LOC_BLACKLIST.has(name) || LOC_BLACKLIST_SUFFIX.some((s) => name.endsWith(s))) continue;
         if (end < text.length && LOC_CONT_CHARS.has(text[end])) continue;
+        // 右边界放宽（2026-11-27）："市民政局牵头落实"这类"机构名+动词谓语"
+        // 是公文高频句式——机构名后紧跟非机构字的 CJK 是正常语序，不应拒绝。
+        // 仅当右侧紧跟 LOC_CONT_CHARS（县市省等行政单位字）时才继续拒绝。
         if (start > 0 && isCjk(text[start - 1]) && !LOC_LEFT_OK.has(text[start - 1])) continue;
+        // "致全市台球室"类公文致函对象：generic 正则剥"致"后左侧剩"致"，
+        // 但 stripLeading 只认 FUNCTION_CHARS——直接检查剥出的实体首字是否致/发类公文动词。
+        if (LOC_VERB_HEAD.has(name[0])) continue;
         if (name.length > 3 && FUNCTION_CHARS.has(name[name.length - 2])) continue;
         out.push(new RecognizerResult(start, end, "LOCATION", 0.85, "ChineseLocationRecognizer"));
       }
@@ -566,13 +614,29 @@ function makeLocationRecognizer(assets) {
 // --------------------------------------------------------------------------- #
 // 组织机构（机构后缀 + 右边界）
 // --------------------------------------------------------------------------- #
-const ORG_SUFFIX = "(股份有限公司|有限责任公司|有限公司|公司|集团|大学|学院|医院|银行|" +
+const ORG_SUFFIX = "(市委|省委|县委|区委|纪委|股份有限公司|有限责任公司|有限公司|公司|集团|大学|学院|医院|银行|" +
   "管理委员会|委员会|管理局|办公厅|办公室|研究院|研究所|事务所|" +
   "信息中心|服务中心|管理中心|指挥中心|政务中心|大数据中心|" +
   "派出所|办事处|管理处|局|厅|委|办|部|院)";
 const RE_ORG = new RegExp("([一-龥（）()·]{2,14}?)" + ORG_SUFFIX, "g");
 const ORG_RIGHT_OK = new Set("的等和与及、，。；：）】》」』\"'");
 const ORG_BODY_TAIL_BAD = new Set("的和与及或等各每该本此其这那哪些上下内外中前后可不为无");
+// 2026-11-25 增补：懒惰匹配把动词/连接词尾吞进 body（"报送市委"→body"报送市"+"委"、
+// "入选教育部"→body"入选教"+"部"、"门与文明办"→body"门与文明"+"办"等）。
+// body 尾字落在这些动词/连接/量词性单字上时拒绝。
+const ORG_BODY_TAIL_BAD2 = new Set("请报送入选举办联合致同共先开月程门办与和及对向在是为了成为得着过把将给让按依向从由把被");
+// body 含未配平括号（"致全市台球室（厅"、"（老干部"）→ 非机构名，拒绝。
+function balancedParens(s) {
+  const pairs = { "（": "）", "(": ")" };
+  const stack = [];
+  for (const c of s) {
+    if (pairs[c]) stack.push(pairs[c]);
+    else if (c === "）" || c === ")") {
+      if (stack.pop() !== c) return false;
+    }
+  }
+  return stack.length === 0;
+}
 const ORG_BODY_BLACKLIST = new Set(["所有", "多个", "每个", "各个", "这个", "那个", "其他", "其它",
   "某些", "哪些", "上级", "下级", "内部", "外部", "相关", "有关",
   "本级", "各级", "必要", "上述", "如下", "本项", "该项"]);
@@ -589,6 +653,9 @@ const ORG_GENERIC_NAMES = new Set([
   "档案室", "后勤保障部", "客户服务部", "开户银行", "所在地人民法院", "人民法院",
 ]);
 const ORG_BODY_TAIL_VERB = new Set("速快代承");
+// body 开头的动词性词组（长词优先）：懒惰匹配常把前面的动词吞进 body。
+const ORG_LEADING_VERBS = ["市成立", "成立", "召开", "举行", "举办", "报送", "入选",
+  "印发", "下发", "联合", "开学", "入选教育部", "致全市", "开展"];
 const ORG_PREFIX_WORDS = ["国家", "中国", "中华", "国务院", "中央", "全国"];
 const ORG_LEADING_PRONOUNS = ["他", "她", "它", "我", "你", "您", "咱", "某"];
 
@@ -633,19 +700,40 @@ function makeOrganizationRecognizer() {
           }
         }
         if (bounds !== null) { /* 无 jieba 时不会进入 */ }
-        else if (!nextOk(text, end)) continue;
-        const body = stripLeading(bodyRaw, FUNCTION_CHARS);
-        if (body.length < 2 || ORG_BODY_BLACKLIST.has(body)) continue;
-        if (body[0] === "第" && NUMERALS.has(body[1])) continue;
-        if (body[body.length - 1] === "第" ||
-            (body.length >= 2 && body[body.length - 2] === "第" && NUMERALS.has(body[body.length - 1]))) continue;
-        if (QUANTITY_PREFIX.has(body[0]) && body.length >= 2 && NUMERALS.has(body[1])) continue;
+        else if (!nextOk(text, end)) {
+          // 2026-11-27 放宽：行政区划前缀的职能部门（市民政局/县公安局/区委组织部
+          // 等，body 含 2-3 字且首字为行政层级字）后接动词谓语是公文高频句式
+          // （"市民政局牵头落实"）——此类强模式无视右边界 CJK，直接采纳。
+          const strongMunicipal = /^[县市省区乡镇][一-龥]{1,3}$/.test(stripLeading(bodyRaw, FUNCTION_CHARS));
+          if (!strongMunicipal) continue;
+        }
+        const body0 = stripLeading(bodyRaw, FUNCTION_CHARS);
+        if (body0.length < 2 || ORG_BODY_BLACKLIST.has(body0)) continue;
+        if (body0[0] === "第" && NUMERALS.has(body0[1])) continue;
+        if (body0[body0.length - 1] === "第" ||
+            (body0.length >= 2 && body0[body0.length - 2] === "第" && NUMERALS.has(body0[body0.length - 1]))) continue;
+        if (QUANTITY_PREFIX.has(body0[0]) && body0.length >= 2 && NUMERALS.has(body0[1])) continue;
+        if (ORG_BODY_TAIL_BAD.has(body0[body0.length - 1])) continue;
+        if (ORG_BODY_TAIL_BAD2.has(body0[body0.length - 1])) continue;
+        if (ORG_SUFFIX_TAIL_CHARS.has(body0[body0.length - 1])) continue;
+        if (!balancedParens(body0)) continue;
+        // body 中段被"门"类字断开（"部门与文明办"切出"门与文明办"）：body 含
+        // "门与/门与未"等断裂模式——body 以"门"开头基本是"部门/专门/开门"被切。
+        if (body0[0] === "门") continue;
+        // body 以动词开头（"市成立宣城市…"、"月举办…"、"报送市委"）→ 剥掉动词后重验，
+        // 剩余不足 2 字则拒绝；剥掉的长度同样前移实体起点，保留真实机构名。
+        let body = body0;
+        let verbStrip = 0;
+        for (const v of ORG_LEADING_VERBS) {
+          if (body.startsWith(v)) { body = body.slice(v.length); verbStrip = v.length; break; }
+        }
+        if (body.length < 2) continue;
         if (ORG_BODY_TAIL_BAD.has(body[body.length - 1])) continue;
-        if (ORG_SUFFIX_TAIL_CHARS.has(body[body.length - 1])) continue;
+        if (ORG_BODY_TAIL_BAD2.has(body[body.length - 1])) continue;
         if (ORG_BODY_TAIL_VERB.has(body[body.length - 1])) continue;
         const suffixStart = m.index + m[0].length - suffix.length;
         // _RE_ORG 的 group1 即整个匹配起点：m.start(1) === m.index
-        let start = m.index + (bodyRaw.length - body.length);
+        let start = m.index + (bodyRaw.length - body0.length) + verbStrip;
         start = trimOrgStart(body, start, end, tokens);
         if (text.slice(start, suffixStart).length < 2) continue;
         if (ORG_GENERIC_NAMES.has(text.slice(start, end))) continue;

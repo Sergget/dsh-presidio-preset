@@ -79,6 +79,13 @@ function readSettings() {
     shellDisabled: coerceShellDisabled(pick("shellDisabled")),
     shellAllowlist: String(pick("shellAllowlist") ?? ""),
   };
+  // 显示模式切换修复：phMap 里缓存的是切换前模式的显示值（明文或打码值），
+  // 不清理的话旧会话流式显示会继续按旧模式还原。切模式即清缓存，
+  // 之后的 scheduleRestore / post-execute 会按新模式重新填充。
+  if (_cfg.values && _cfg.values.displayMode !== values.displayMode) {
+    phMap.clear();
+    displayBufs.clear();
+  }
   _cfg = { sig, values, allowlist: null, allowlistSrc: null };
   return values;
 }
